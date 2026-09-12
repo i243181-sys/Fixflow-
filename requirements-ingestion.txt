@@ -1,0 +1,7 @@
+langchain-community
+langchain-text-splitters
+pypdf
+cryptography
+fonttools
+beautifulsoup4
+docx2txt
