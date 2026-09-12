@@ -40,10 +40,11 @@ def test_debug_chat_and_session(client: TestClient) -> None:
 
     chat = client.post(
         "/api/chat",
-        json={"session_id": diagnosis["sessionId"], "question": "What should I change?"},
+        json={"session_id": diagnosis["sessionId"], "question": "How does the asyncio event loop work?"},
     )
     assert chat.status_code == 200
     assert chat.json()["role"] == "fixflow"
+    assert "Retrieved from the loaded documentation" in chat.json()["text"]
 
     session = client.get(f"/api/sessions/{diagnosis['sessionId']}")
     assert session.status_code == 200

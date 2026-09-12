@@ -22,6 +22,16 @@ The organized files are grouped into `doc/data/guides`, `doc/data/pdf`, `doc/dat
 
 The script includes PDFs, Markdown, text, RST, source/config files, CSV, HTML, and DOCX. It intentionally skips the generated Python HTML and Texinfo trees because the text export already contains the same documentation without navigation assets. EPUB is also left out until an EPUB-specific loader is added.
 
+## Create embedding-ready chunks
+
+After loading, create stable retrieval chunks:
+
+```bash
+python3 scripts/chunk_documents.py
+```
+
+This writes `doc/processed/chunks.jsonl`. Markdown is split by headings, source code uses code-aware separators, and every chunk keeps source/page metadata with a stable `chunk_id`. Embed `chunks.jsonl`, not the raw document snapshot.
+
 ## Adding more documentation
 
 Copy new files into `doc/`, then rerun:
@@ -31,6 +41,8 @@ python3 scripts/ingest_documents.py --organize --load
 ```
 
 Use `--replace` when an existing source file has changed and its organized copy should be refreshed.
+
+Uploads from the FixFlow UI run the same pipeline automatically: the file is stored, loaded into `documents.jsonl`, and re-chunked into `chunks.jsonl`. The upload response remains `indexing` until the background job finishes.
 
 ## Reset and restart
 

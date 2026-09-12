@@ -9,6 +9,7 @@ const execFileAsync = promisify(execFile);
 const PROJECT_ROOT = process.cwd();
 const UPLOAD_ROOT = path.join(PROJECT_ROOT, "doc", "uploads");
 const INDEX_FILE = path.join(PROJECT_ROOT, "doc", "processed", "documents.jsonl");
+const CHUNKS_FILE = path.join(PROJECT_ROOT, "doc", "processed", "chunks.jsonl");
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 function safeFileName(name: string): string {
@@ -83,6 +84,17 @@ export async function POST(request: Request) {
       ],
       { cwd: PROJECT_ROOT, maxBuffer: 10 * 1024 * 1024 }
     );
+    await execFileAsync(
+      pythonExecutable(),
+      [
+        path.join(PROJECT_ROOT, "scripts", "chunk_documents.py"),
+        "--input",
+        INDEX_FILE,
+        "--output",
+        CHUNKS_FILE,
+      ],
+      { cwd: PROJECT_ROOT, maxBuffer: 10 * 1024 * 1024 }
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Document ingestion failed.";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -95,13 +107,20 @@ export async function POST(request: Request) {
     // The loader succeeded only if it created the index, but keep the response safe.
   }
 
+  let chunkCount = 0;
+  try {
+    chunkCount = (await readFile(CHUNKS_FILE, "utf8")).split("\n").filter(Boolean).length;
+  } catch {
+    // The chunker succeeded only if it created the output, but keep the response safe.
+  }
+
   return NextResponse.json({
     id: `source-${randomUUID()}`,
     name: value || fileName,
     kind: kind === "docs" ? "docs" : "upload",
     status: "indexed",
-    chunks: Math.max(afterLines - beforeLines, 0),
+    chunks: chunkCount || Math.max(afterLines - beforeLines, 0),
     updated: new Date().toISOString(),
-    detail: `${Math.max(afterLines - beforeLines, 0)} document chunk(s) added to the local index`,
+    detail: `${chunkCount || Math.max(afterLines - beforeLines, 0)} total chunks ready for embeddings`,
   });
 }

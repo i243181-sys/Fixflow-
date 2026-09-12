@@ -40,14 +40,23 @@ def file_hash(data: bytes) -> str:
 
 
 def ingest_upload(source_id: str, upload_dir: Path) -> None:
-    command = [
-        os.getenv("FIXFLOW_PYTHON", sys.executable),
+    python = os.getenv("FIXFLOW_PYTHON", sys.executable)
+    ingest_command = [
+        python,
         str(Path(__file__).resolve().parents[2] / "scripts" / "ingest_documents.py"),
         "--source", str(upload_dir), "--load", "--append", "--output", str(store.INDEX_FILE),
     ]
+    chunk_command = [
+        python,
+        str(Path(__file__).resolve().parents[2] / "scripts" / "chunk_documents.py"),
+        "--input", str(store.INDEX_FILE), "--output", str(store.CHUNKS_FILE),
+    ]
     try:
-        subprocess.run(command, cwd=store.ROOT, check=True, capture_output=True, text=True, timeout=300)
-        store.update_source(source_id, status="indexed", chunks=1, detail="stored and loaded into the local document index")
+        subprocess.run(ingest_command, cwd=store.ROOT, check=True, capture_output=True, text=True, timeout=300)
+        subprocess.run(chunk_command, cwd=store.ROOT, check=True, capture_output=True, text=True, timeout=300)
+        with store.CHUNKS_FILE.open(encoding="utf-8") as chunk_file:
+            chunks = sum(1 for line in chunk_file if line.strip())
+        store.update_source(source_id, status="indexed", chunks=chunks, detail="ingested and chunked for embeddings")
     except (subprocess.SubprocessError, OSError):
         store.update_source(source_id, status="error", detail="stored, but document loading failed")
 

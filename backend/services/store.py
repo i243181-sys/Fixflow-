@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -15,10 +17,13 @@ from backend.schemas.models import (
 ROOT = Path(__file__).resolve().parents[2]
 UPLOAD_DIR = ROOT / "backend" / "uploads"
 INDEX_FILE = ROOT / "doc" / "processed" / "documents.jsonl"
+CHUNKS_FILE = ROOT / "doc" / "processed" / "chunks.jsonl"
 
 _sessions: dict[str, dict[str, object]] = {}
 _sources: dict[str, KnowledgeSource] = {}
 _saved: dict[str, SavedSolution] = {}
+_chunk_cache: list[dict[str, object]] = []
+_chunk_cache_mtime: float | None = None
 
 
 def now() -> datetime:
@@ -48,6 +53,28 @@ def _source_docs() -> list[dict[str, object]]:
             "used": True,
         },
     ]
+
+
+def _retrieve_chunks(question: str, limit: int = 3) -> list[dict[str, object]]:
+    global _chunk_cache, _chunk_cache_mtime
+    if not CHUNKS_FILE.exists():
+        return []
+    modified = CHUNKS_FILE.stat().st_mtime
+    if _chunk_cache_mtime != modified:
+        with CHUNKS_FILE.open(encoding="utf-8") as stream:
+            _chunk_cache = [json.loads(line) for line in stream if line.strip()]
+        _chunk_cache_mtime = modified
+
+    terms = set(re.findall(r"[a-zA-Z0-9_]{3,}", question.lower()))
+    scored: list[tuple[int, dict[str, object]]] = []
+    for chunk in _chunk_cache:
+        text = str(chunk.get("page_content") or "")
+        words = set(re.findall(r"[a-zA-Z0-9_]{3,}", text.lower()))
+        score = len(terms & words)
+        if score:
+            scored.append((score, chunk))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [chunk for _, chunk in scored[:limit]]
 
 
 def diagnose(payload: dict[str, object]) -> Diagnosis:
@@ -96,11 +123,26 @@ def chat(session_id: str, question: str) -> ChatMessage:
     messages = session["messages"]
     assert isinstance(messages, list)
     messages.append({"id": str(uuid4()), "role": "user", "text": question})
+    matches = _retrieve_chunks(question)
+    if matches:
+        excerpts = []
+        source_names = []
+        for match in matches:
+            metadata = match.get("metadata") or {}
+            source_names.append(str(metadata.get("filename") or "documentation"))
+            excerpt = " ".join(str(match.get("page_content") or "").split())[:500]
+            excerpts.append(f"{metadata.get('filename', 'Documentation')}: {excerpt}")
+        reply_text = "Retrieved from the loaded documentation:\n\n" + "\n\n".join(excerpts)
+        reply_sources = [{"title": name, "type": "docs"} for name in dict.fromkeys(source_names)]
+    else:
+        reply_text = "I could not find a close match in the loaded chunks. Try naming the error, library, or function involved."
+        reply_sources = []
+
     reply = ChatMessage(
         id=str(uuid4()),
         role="fixflow",
-        text="The backend received your follow-up. The next retriever step will ground this answer in the indexed documents.",
-        sources=[{"title": "Local documentation index", "type": "docs"}],
+        text=reply_text,
+        sources=reply_sources,
     )
     messages.append(reply.model_dump())
     return reply
