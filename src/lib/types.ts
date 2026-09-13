@@ -73,15 +73,20 @@ export interface DebugSession {
 
 export interface KnowledgeSource {
   id: string;
+  source_id: string;
   name: string;
   kind: "docs" | "github" | "community" | "upload";
-  status: "indexed" | "indexing" | "queued" | "error";
+  source_type: "docs" | "github" | "community" | "upload";
+  status: "uploaded" | "processing" | "chunked" | "ready_for_embedding" | "indexed" | "failed";
   chunks: number;
+  documents: number;
+  document_count: number;
+  chunk_count: number;
+  error_message: string | null;
+  created_at: string;
   updated: string;
   detail: string;
 }
-
-export type MockKnowledgeSource = Omit<KnowledgeSource, "id">;
 
 export interface SavedSolution {
   id: string;

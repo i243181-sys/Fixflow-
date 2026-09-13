@@ -11,6 +11,7 @@ import {
   listKnowledgeSources,
 } from "@/lib/api";
 import type { KnowledgeSource } from "@/lib/types";
+import { isSourcePending, SOURCE_STATUS } from "@/lib/sources";
 import { cn } from "@/lib/utils";
 
 type SourceMode = "docs" | "github" | "upload";
@@ -41,13 +42,6 @@ const SOURCE_MODES: {
   },
 ];
 
-const STATUS_TONE: Record<KnowledgeSource["status"], "success" | "warning" | "danger" | "muted"> = {
-  indexed: "success",
-  indexing: "warning",
-  queued: "muted",
-  error: "danger",
-};
-
 function sourceName(mode: SourceMode, title: string, value: string): string {
   if (mode === "github") return value.trim();
   if (title) return title;
@@ -76,6 +70,25 @@ export default function SourcesPage() {
     return () => controller.abort();
   }, [toast]);
 
+  const hasPendingSources = sources.some(isSourcePending);
+  useEffect(() => {
+    if (!hasPendingSources) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const current = await listKnowledgeSources(controller.signal);
+        if (controller.signal.aborted) return;
+        setSources(current);
+        if (current.some(isSourcePending)) timer = setTimeout(refresh, 2000);
+      } catch {
+        if (!controller.signal.aborted) toast("Could not refresh source status. Reload to retry.", "error");
+      }
+    };
+    timer = setTimeout(refresh, 2000);
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [hasPendingSources, toast]);
+
   const resetForm = () => {
     setTitle("");
     setValue("");
@@ -97,15 +110,14 @@ export default function SourcesPage() {
       const source = await addKnowledgeSource({
         kind: mode,
         value: sourceName(mode, title, value),
-        fileName: mode === "upload" ? title || value.trim() : undefined,
         content: mode === "docs" || (mode === "upload" && !selectedFile) ? value : undefined,
         file: mode === "upload" ? selectedFile ?? undefined : undefined,
       });
-      setSources((current) => [source, ...current]);
+      setSources((current) => [source, ...current.filter((item) => item.id !== source.id)]);
       resetForm();
-      toast("Source added to the initial knowledge base.", "success");
-    } catch {
-      toast("Could not add this source. Try again.", "error");
+      toast(source.error_message || "Source saved to the knowledge base.", source.status === "failed" ? "error" : "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not add this source. Try again.", "error");
     } finally {
       setBusy(false);
     }
@@ -113,6 +125,10 @@ export default function SourcesPage() {
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
+    if (file.size > 50 * 1024 * 1024) {
+      toast("Document exceeds the 50 MB limit", "error");
+      return;
+    }
     setTitle(file.name);
     setSelectedFile(file);
     if (file.type === "text/plain" || file.name.endsWith(".md")) {
@@ -132,7 +148,7 @@ export default function SourcesPage() {
             </p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight">Give FixFlow its context.</h1>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted">
-              Add documentation here once. New diagnosis runs can retrieve from these indexed sources,
+              Add documentation here once. These sources will be ready for the embedding pipeline,
               and you can extend the collection whenever your project grows.
             </p>
           </div>
@@ -252,7 +268,7 @@ export default function SourcesPage() {
           <section className="rounded-xl border border-border bg-panel p-4 sm:p-5">
             <div className="mb-3 flex items-center gap-2">
               <BookOpen size={15} className="text-lime" />
-              <h2 className="text-sm font-semibold">Indexed sources</h2>
+              <h2 className="text-sm font-semibold">Knowledge sources</h2>
             </div>
             <div className="space-y-1.5">
               {sources.map((source) => (
@@ -261,9 +277,12 @@ export default function SourcesPage() {
                     {source.kind === "github" ? <GitBranch size={14} className="mt-0.5 text-accent" /> : <FileText size={14} className="mt-0.5 text-muted" />}
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-xs font-medium">{source.name}</p>
-                      <p className="mt-0.5 truncate text-[10px] text-muted">{source.detail}</p>
+                      <p className="mt-0.5 text-[10px] text-muted">
+                        {source.kind} · {source.document_count} documents · {source.chunk_count} chunks
+                      </p>
+                      {source.error_message && <p className="mt-1 text-[10px] text-red-400">{source.error_message}</p>}
                     </div>
-                    <Badge tone={STATUS_TONE[source.status]}>{source.status}</Badge>
+                    <Badge tone={SOURCE_STATUS[source.status].tone}>{SOURCE_STATUS[source.status].label}</Badge>
                   </div>
                 </div>
               ))}

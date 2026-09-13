@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/code-block";
 import { Tabs, Tooltip } from "@/components/ui/tabs";
 import { ToastProvider, useToast } from "@/components/ui/toast";
-import { ASYNCIO_DIAGNOSIS } from "@/lib/mock-data";
+import { ASYNCIO_DIAGNOSIS } from "./fixtures/diagnosis";
 
 const sendFollowUp = vi.hoisted(() => vi.fn());
 

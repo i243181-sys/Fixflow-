@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { useTheme } from "@/components/layout/theme-provider";
 import { checkBackendHealth, listKnowledgeSources } from "@/lib/api";
 import type { KnowledgeSource } from "@/lib/types";
+import { SOURCE_STATUS } from "@/lib/sources";
 
 const BACKEND_TONE = {
   checking: "warning",
@@ -131,7 +132,7 @@ export default function SettingsPage() {
               <div key={source.id} className="flex items-center gap-2 text-xs">
                 <span className="min-w-0 flex-1 truncate text-foreground/80">{source.name}</span>
                 <span className="font-mono text-muted">{source.chunks} records</span>
-                <Badge tone={source.status === "indexed" ? "success" : "warning"}>{source.status}</Badge>
+                <Badge tone={SOURCE_STATUS[source.status].tone}>{SOURCE_STATUS[source.status].label}</Badge>
               </div>
             ))}
             {!sources.length && <p className="text-xs text-muted">No source status available.</p>}

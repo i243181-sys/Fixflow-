@@ -102,6 +102,14 @@ describe("backend API client", () => {
     ]);
   });
 
+  it("encodes source IDs when checking ingestion status", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "ready_for_embedding" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { getSourceStatus } = await loadApi();
+    await getSourceStatus("source/path");
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/sources/source%2Fpath/status", expect.any(Object));
+  });
+
   it("passes document uploads through multipart form data", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "source" }));
     vi.stubGlobal("fetch", fetchMock);
@@ -140,11 +148,11 @@ describe("backend API client", () => {
     await expect(request).rejects.toHaveProperty("cause", failure);
   });
 
-  it("cancels mock-mode delays when their caller aborts", async () => {
+  it("requires a real backend instead of returning mock records", async () => {
     const { listSessions } = await loadApi("");
     const controller = new AbortController();
     controller.abort();
 
-    await expect(listSessions(controller.signal)).rejects.toHaveProperty("name", "AbortError");
+    await expect(listSessions(controller.signal)).rejects.toThrow("NEXT_PUBLIC_API_URL is not configured");
   });
 });

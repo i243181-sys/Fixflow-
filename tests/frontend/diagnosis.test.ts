@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { diagnosisMarkdown } from "@/lib/diagnosis";
-import { ASYNCIO_DIAGNOSIS } from "@/lib/mock-data";
+import { ASYNCIO_DIAGNOSIS } from "./fixtures/diagnosis";
 
 describe("diagnosisMarkdown", () => {
   it("exports the diagnosis, steps, and source locations", () => {

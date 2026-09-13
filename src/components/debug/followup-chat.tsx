@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { BookOpen, Bot, CornerDownLeft, GitBranch, MessagesSquare, Code2, User } from "lucide-react";
-import { FOLLOWUP_SUGGESTIONS } from "@/lib/mock-data";
+import { FOLLOWUP_SUGGESTIONS } from "@/lib/chat-suggestions";
 import { sendFollowUp } from "@/lib/api";
 import type { ChatMessage, SourceType } from "@/lib/types";
 import { cn } from "@/lib/utils";

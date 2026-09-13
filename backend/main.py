@@ -1,19 +1,41 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlsplit
 
+from asyncpg import PostgresError
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.api.routes import router
+from backend.config import get_settings
+from backend.db.session import close_database, get_engine
+from backend.services.ingestion import ingestion_worker
 
-app = FastAPI(title="FixFlow API", version="0.1.0")
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    worker = asyncio.create_task(ingestion_worker(), name="document-ingestion")
+    try:
+        yield
+    finally:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+        await close_database()
+
+
+app = FastAPI(title="FixFlow API", version="0.2.0", lifespan=lifespan)
 
 
 def configured_origins(value: str) -> list[str]:
@@ -41,7 +63,7 @@ def configured_origins(value: str) -> list[str]:
     return origins
 
 
-origins = configured_origins(os.getenv("FRONTEND_ORIGINS", "http://localhost:3000"))
+origins = configured_origins(get_settings().frontend_origins)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -70,19 +92,46 @@ async def validation_error(_: Request, __: RequestValidationError) -> JSONRespon
 
 @app.exception_handler(Exception)
 async def unhandled_error(request: Request, error: Exception) -> JSONResponse:
-    error_info = (type(error), error, error.__traceback__)
     logger.error(
-        "Unhandled error while processing %s %s",
+        "Unhandled error while processing %s %s (%s)",
         request.method,
         request.url.path,
-        exc_info=error_info,
+        type(error).__name__,
     )
     return error_response("INTERNAL_ERROR", "Internal server error", 500)
 
 
+@app.exception_handler(SQLAlchemyError)
+@app.exception_handler(PostgresError)
+async def database_error(_: Request, __: SQLAlchemyError | PostgresError) -> JSONResponse:
+    return error_response("DATABASE_UNAVAILABLE", "Database operation unavailable", 503)
+
+
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "service": "fixflow-api"}
+async def health() -> JSONResponse:
+    database = "unavailable"
+    vector = "unavailable"
+    try:
+        async with get_engine().connect() as connection:
+            await connection.execute(text("SELECT 1"))
+            database = "connected"
+            enabled = await connection.scalar(
+                text("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')")
+            )
+            vector = "available" if enabled else "unavailable"
+    except (SQLAlchemyError, PostgresError, OSError, ValueError, TimeoutError):
+        pass
+    healthy = database == "connected" and vector == "available"
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={
+            "status": "ok" if healthy else "degraded",
+            "service": "fixflow-api",
+            "api": "ok",
+            "database": database,
+            "pgvector": vector,
+        },
+    )
 
 
 app.include_router(router, prefix="/api")

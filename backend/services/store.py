@@ -1,151 +1,41 @@
+"""Persistent debug sessions and lexical retrieval (no embedding generation)."""
+
 from __future__ import annotations
 
-import json
-import logging
-import os
 import re
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
-from threading import RLock
-from typing import TypeAlias
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.db.models import ChatEntry, DebugSession, DocumentChunk, KnowledgeSource
+from backend.db.models import SavedSolution as SavedRecord
 from backend.schemas.models import (
     ChatMessage,
     CodeFix,
     DebugRequest,
     Diagnosis,
     FixStep,
-    KnowledgeKind,
-    KnowledgeSource,
     RagDetails,
     SavedSolution,
     SaveRequest,
     SessionSummary,
-    SourceDoc,
     SourceReference,
-    SourceStatus,
 )
 
-ROOT = Path(__file__).resolve().parents[2]
-BACKEND_DIR = ROOT / "backend"
-_configured_data_dir = Path(os.getenv("FIXFLOW_DATA_DIR", str(ROOT / "doc"))).expanduser()
-DATA_DIR = (
-    _configured_data_dir
-    if _configured_data_dir.is_absolute()
-    else (BACKEND_DIR / _configured_data_dir).resolve()
-)
-UPLOAD_DIR = ROOT / "backend" / "uploads"
-INDEX_FILE = DATA_DIR / "processed" / "documents.jsonl"
-CHUNKS_FILE = DATA_DIR / "processed" / "chunks.jsonl"
-
-logger = logging.getLogger(__name__)
-Chunk: TypeAlias = dict[str, object]
-
-
-@dataclass(slots=True)
-class SessionRecord:
-    diagnosis: Diagnosis
-    created_at: datetime
-    messages: list[ChatMessage] = field(default_factory=list)
+_SEARCH_TERM_PATTERN = re.compile(r"[a-zA-Z0-9_]{3,}")
 
 
 class SessionNotFoundError(LookupError):
     """Raised when a chat references an unknown debug session."""
 
 
-_state_lock = RLock()
-_chunk_lock = RLock()
-_sessions: dict[str, SessionRecord] = {}
-_sources: dict[str, KnowledgeSource] = {}
-_saved: dict[str, SavedSolution] = {}
-_source_hashes: set[str] = set()
-_chunk_cache: list[Chunk] = []
-_chunk_cache_mtime: float | None = None
-_SEARCH_TERM_PATTERN = re.compile(r"[a-zA-Z0-9_]{3,}")
-
-
 def now() -> datetime:
     return datetime.now(UTC)
 
 
-def _source_docs() -> list[SourceDoc]:
-    return [
-        SourceDoc(
-            id="python-docs",
-            type="docs",
-            title="Python documentation corpus",
-            publisher="Local knowledge base",
-            url="",
-            relevance=94,
-            excerpt="Retrieved from the locally loaded documentation index.",
-        ),
-        SourceDoc(
-            id="fastapi-docs",
-            type="docs",
-            title="FastAPI documentation",
-            publisher="FastAPI",
-            url="https://fastapi.tiangolo.com",
-            relevance=90,
-            excerpt="Official FastAPI guidance for request handling and async routes.",
-        ),
-    ]
-
-
-def _read_chunks() -> tuple[list[Chunk], float | None]:
-    try:
-        modified = CHUNKS_FILE.stat().st_mtime
-    except FileNotFoundError:
-        return [], None
-
-    chunks: list[Chunk] = []
-    try:
-        with CHUNKS_FILE.open(encoding="utf-8") as stream:
-            for line_number, line in enumerate(stream, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.warning("Skipping malformed chunk record at line %s", line_number)
-                    continue
-                if isinstance(item, dict):
-                    chunks.append(item)
-                else:
-                    logger.warning("Skipping non-object chunk record at line %s", line_number)
-    except OSError:
-        logger.exception("Could not read the chunk index")
-        return [], None
-    return chunks, modified
-
-
-def _cached_chunks() -> list[Chunk]:
-    global _chunk_cache, _chunk_cache_mtime
-    try:
-        modified = CHUNKS_FILE.stat().st_mtime
-    except FileNotFoundError:
-        return []
-    with _chunk_lock:
-        if _chunk_cache_mtime != modified:
-            _chunk_cache, _chunk_cache_mtime = _read_chunks()
-        return list(_chunk_cache)
-
-
-def _retrieve_chunks(question: str, limit: int = 3) -> list[Chunk]:
-    terms = set(_SEARCH_TERM_PATTERN.findall(question.lower()))
-    scored: list[tuple[int, Chunk]] = []
-    for chunk in _cached_chunks():
-        text = str(chunk.get("page_content") or "")
-        words = set(_SEARCH_TERM_PATTERN.findall(text.lower()))
-        score = len(terms & words)
-        if score:
-            scored.append((score, chunk))
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return [chunk for _, chunk in scored[:limit]]
-
-
-def diagnose(payload: DebugRequest) -> Diagnosis:
+async def diagnose(db: AsyncSession, payload: DebugRequest) -> Diagnosis:
     session_id = str(uuid4())
     error = payload.error or payload.context or ""
     techs = list(payload.techs)
@@ -194,66 +84,63 @@ def diagnose(payload: DebugRequest) -> Diagnosis:
             after="async def get_report():\n    return await build_report()",
         ),
         alternatives=[],
-        sources=_source_docs(),
+        sources=[],
         rag=RagDetails(
             query=error,
             expansions=[],
             retrieved=0,
             reranked=0,
-            sourcesUsed=2,
+            sourcesUsed=0,
             topChunks=[],
         ),
     )
-    with _state_lock:
-        _sessions[session_id] = SessionRecord(diagnosis=diagnosis, created_at=now())
+    db.add(DebugSession(id=UUID(session_id), diagnosis=diagnosis.model_dump(mode="json")))
+    await db.commit()
     return diagnosis
 
 
-def chat(session_id: str, question: str) -> ChatMessage:
-    with _state_lock:
-        session = _sessions.get(session_id)
-        if session is None:
-            raise SessionNotFoundError("Session not found")
-        session.messages.append(ChatMessage(id=str(uuid4()), role="user", text=question))
-    matches = _retrieve_chunks(question)
+async def chat(db: AsyncSession, session_id: UUID, question: str) -> ChatMessage:
+    if await db.get(DebugSession, session_id) is None:
+        raise SessionNotFoundError("Session not found")
+    terms = sorted(set(_SEARCH_TERM_PATTERN.findall(question.lower())))[:100]
+    matches = []
+    if terms:
+        query = func.to_tsquery("simple", " | ".join(terms))
+        matches = list(
+            (
+                await db.execute(
+                    select(DocumentChunk.content, KnowledgeSource.name)
+                    .join(KnowledgeSource, KnowledgeSource.id == DocumentChunk.source_id)
+                    .where(DocumentChunk.search_text.op("@@")(query))
+                    .order_by(func.ts_rank(DocumentChunk.search_text, query).desc(), DocumentChunk.id)
+                    .limit(3)
+                )
+            ).all()
+        )
+    sources = []
     if matches:
-        excerpts = []
-        source_names = []
-        for match in matches:
-            metadata = match.get("metadata") or {}
-            if not isinstance(metadata, dict):
-                metadata = {}
-            source_names.append(str(metadata.get("filename") or "documentation"))
-            excerpt = " ".join(str(match.get("page_content") or "").split())[:500]
-            excerpts.append(f"{metadata.get('filename', 'Documentation')}: {excerpt}")
-        reply_text = "Retrieved from the loaded documentation:\n\n" + "\n\n".join(excerpts)
-        reply_sources = [SourceReference(title=name, type="docs") for name in dict.fromkeys(source_names)]
+        excerpts = [f"{name}: {' '.join(content.split())[:500]}" for content, name in matches]
+        text = "Retrieved from the loaded documentation:\n\n" + "\n\n".join(excerpts)
+        sources = [SourceReference(title=name, type="docs") for name in dict.fromkeys(name for _, name in matches)]
     else:
-        reply_text = (
+        text = (
             "I could not find a close match in the loaded chunks. Try naming the error, library, or function involved."
         )
-        reply_sources = []
-
-    reply = ChatMessage(
-        id=str(uuid4()),
-        role="fixflow",
-        text=reply_text,
-        sources=reply_sources,
-    )
-    with _state_lock:
-        session.messages.append(reply)
+    reply = ChatMessage(id=str(uuid4()), role="fixflow", text=text, sources=sources)
+    user = ChatMessage(id=str(uuid4()), role="user", text=question)
+    db.add_all([ChatEntry(session_id=session_id, payload=message.model_dump(mode="json")) for message in (user, reply)])
+    await db.commit()
     return reply
 
 
-def sessions() -> list[SessionSummary]:
-    result: list[SessionSummary] = []
-    with _state_lock:
-        records = list(_sessions.items())
-    for session_id, record in reversed(records):
-        diagnosis = record.diagnosis
+async def sessions(db: AsyncSession) -> list[SessionSummary]:
+    records = await db.scalars(select(DebugSession).order_by(DebugSession.created_at.desc()))
+    result = []
+    for record in records:
+        diagnosis = Diagnosis.model_validate(record.diagnosis)
         result.append(
             SessionSummary(
-                id=session_id,
+                id=str(record.id),
                 title="FixFlow debug session",
                 technology=diagnosis.detected,
                 createdAt=record.created_at,
@@ -265,115 +152,18 @@ def sessions() -> list[SessionSummary]:
     return result
 
 
-def get_session(session_id: str) -> Diagnosis | None:
-    with _state_lock:
-        record = _sessions.get(session_id)
-        return record.diagnosis if record else None
+async def get_session(db: AsyncSession, session_id: UUID) -> Diagnosis | None:
+    record = await db.get(DebugSession, session_id)
+    return Diagnosis.model_validate(record.diagnosis) if record else None
 
 
-def sources() -> list[KnowledgeSource]:
-    with _state_lock:
-        if _sources:
-            return list(_sources.values())
-    chunks = 0
-    try:
-        if INDEX_FILE.exists():
-            with INDEX_FILE.open(encoding="utf-8") as stream:
-                chunks = sum(1 for line in stream if line.strip())
-    except OSError:
-        logger.exception("Could not inspect the document index")
-    with _state_lock:
-        if not _sources:
-            _sources["local-index"] = KnowledgeSource(
-                id="local-index",
-                name="Local documentation index",
-                kind="docs",
-                status="indexed" if chunks else "queued",
-                chunks=chunks,
-                updated=now(),
-                detail=f"{chunks} loaded document records",
-            )
-        return list(_sources.values())
+async def saved(db: AsyncSession) -> list[SavedSolution]:
+    records = await db.scalars(select(SavedRecord).order_by(SavedRecord.created_at.desc()))
+    return [SavedSolution.model_validate(record.payload) for record in records]
 
 
-def add_source(
-    name: str,
-    kind: KnowledgeKind,
-    chunks: int,
-    detail: str,
-    status: SourceStatus = "indexing",
-) -> KnowledgeSource:
-    source = KnowledgeSource(
-        id=str(uuid4()),
-        name=name,
-        kind=kind,
-        status=status,
-        chunks=chunks,
-        updated=now(),
-        detail=detail,
-    )
-    with _state_lock:
-        _sources[source.id] = source
-    return source
-
-
-def reserve_source_hash(content_hash: str) -> bool:
-    with _state_lock:
-        if content_hash in _source_hashes:
-            return False
-        _source_hashes.add(content_hash)
-        return True
-
-
-def release_source_hash(content_hash: str) -> None:
-    with _state_lock:
-        _source_hashes.discard(content_hash)
-
-
-def update_source(
-    source_id: str,
-    *,
-    status: SourceStatus,
-    detail: str,
-    chunks: int | None = None,
-) -> None:
-    with _state_lock:
-        source = _sources.get(source_id)
-        if source is None:
-            return
-        update: dict[str, object] = {"status": status, "detail": detail, "updated": now()}
-        if chunks is not None:
-            update["chunks"] = chunks
-        _sources[source_id] = KnowledgeSource.model_validate({**source.model_dump(), **update})
-
-
-def saved() -> list[SavedSolution]:
-    with _state_lock:
-        return list(_saved.values())
-
-
-def save_solution(payload: SaveRequest) -> SavedSolution:
-    solution = SavedSolution(
-        id=str(uuid4()),
-        problem=payload.problem,
-        rootCause=payload.rootCause,
-        technology=payload.technology,
-        fixSummary=payload.fixSummary,
-        sources=payload.sources,
-        savedAt=now(),
-    )
-    with _state_lock:
-        _saved[solution.id] = solution
+async def save_solution(db: AsyncSession, payload: SaveRequest) -> SavedSolution:
+    solution = SavedSolution(id=str(uuid4()), **payload.model_dump(), savedAt=now())
+    db.add(SavedRecord(id=UUID(solution.id), payload=solution.model_dump(mode="json")))
+    await db.commit()
     return solution
-
-
-def reset() -> None:
-    global _chunk_cache_mtime
-    with _state_lock:
-        _sessions.clear()
-        _sources.clear()
-        _saved.clear()
-        _source_hashes.clear()
-    with _chunk_lock:
-        _chunk_cache.clear()
-        _chunk_cache_mtime = None

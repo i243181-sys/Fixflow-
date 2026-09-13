@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 SourceType = Literal["docs", "github", "community", "code"]
 KnowledgeKind = Literal["docs", "github", "community", "upload"]
-SourceStatus = Literal["indexed", "indexing", "queued", "error"]
+SourceStatus = Literal["uploaded", "processing", "chunked", "ready_for_embedding", "indexed", "failed"]
 ShortText = Annotated[str, Field(max_length=200)]
 
 
@@ -128,10 +128,20 @@ class SessionSummary(BaseModel):
 
 class KnowledgeSource(BaseModel):
     id: str
+    source_id: str
     name: str
     kind: KnowledgeKind
+    source_type: KnowledgeKind
     status: SourceStatus
     chunks: int = Field(ge=0)
+    chunk_count: int = Field(ge=0)
+    documents: int = Field(ge=0)
+    document_count: int = Field(ge=0)
+    technology: str | None = None
+    version: str | None = None
+    url: str | None = None
+    error_message: str | None = None
+    created_at: datetime
     updated: datetime
     detail: str
 

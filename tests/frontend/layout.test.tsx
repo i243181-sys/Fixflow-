@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppShell } from "@/components/layout/app-shell";
 import { RightPanel } from "@/components/layout/right-panel";
 import { ThemeProvider, useTheme } from "@/components/layout/theme-provider";
-import { ASYNCIO_DIAGNOSIS } from "@/lib/mock-data";
+import { ASYNCIO_DIAGNOSIS } from "./fixtures/diagnosis";
 
 const api = vi.hoisted(() => ({
   checkBackendHealth: vi.fn(),

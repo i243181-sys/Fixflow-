@@ -1,21 +1,74 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+import os
+import subprocess
+import sys
+from collections.abc import AsyncIterator
+from pathlib import Path
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import get_settings
+from backend.db.session import close_database, get_engine, get_session_factory
 from backend.main import app
-from backend.services import store
-
-
-@pytest.fixture(autouse=True)
-def reset_store() -> Iterator[None]:
-    store.reset()
-    yield
-    store.reset()
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.fixture(scope="session")
+def migrated_database() -> str:
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("Set TEST_DATABASE_URL to a disposable PostgreSQL database ending in _test")
+    if not (make_url(url).database or "").endswith("_test"):
+        raise ValueError("Refusing to reset a database whose name does not end in _test")
+    env = {**os.environ, "DATABASE_URL": url}
+    for command in (["downgrade", "base"], ["upgrade", "head"], ["upgrade", "head"]):
+        subprocess.run([sys.executable, "-m", "alembic", *command], env=env, check=True, timeout=60)
+    return url
+
+
+@pytest.fixture
+async def database(
+    migrated_database: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> AsyncIterator[None]:
+    monkeypatch.setenv("DATABASE_URL", migrated_database)
+    monkeypatch.setenv("FIXFLOW_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("EMBEDDING_DIM", raising=False)
+    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    get_settings.cache_clear()
+    await close_database()
+    async with get_engine().begin() as connection:
+        await connection.execute(
+            text(
+                "TRUNCATE knowledge_sources, documents, document_chunks, "
+                "debug_sessions, chat_messages, saved_solutions CASCADE"
+            )
+        )
+    try:
+        yield
+    finally:
+        await close_database()
+        get_settings.cache_clear()
+
+
+@pytest.fixture
+async def db(database: None) -> AsyncIterator[AsyncSession]:
+    async with get_session_factory()() as session:
+        yield session
+
+
+@pytest.fixture
+async def client(database: None) -> AsyncIterator[httpx.AsyncClient]:
+    # Worker execution is explicit in tests; separate lifecycle coverage exercises startup recovery.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        yield client

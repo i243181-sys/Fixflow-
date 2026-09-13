@@ -18,7 +18,7 @@ import json
 import shutil
 import tempfile
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import IO, Protocol
 
@@ -77,6 +77,8 @@ class LoadedDocument(Protocol):
 
 class DocumentLoader(Protocol):
     def load(self) -> Sequence[LoadedDocument]: ...
+
+    def lazy_load(self) -> Iterator[LoadedDocument]: ...
 
 
 def file_hash(file_path: Path) -> str:

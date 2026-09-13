@@ -6,7 +6,7 @@ import DebugSessionPage from "@/app/page";
 import SavedPage from "@/app/saved/page";
 import SettingsPage from "@/app/settings/page";
 import SourcesPage from "@/app/sources/page";
-import { ASYNCIO_DIAGNOSIS } from "@/lib/mock-data";
+import { ASYNCIO_DIAGNOSIS } from "./fixtures/diagnosis";
 
 const api = vi.hoisted(() => ({
   addKnowledgeSource: vi.fn(),
@@ -125,7 +125,7 @@ describe("application pages", () => {
       id: "source-1",
       name: "Runbook",
       kind: "docs",
-      status: "indexing",
+      status: "uploaded",
       chunks: 0,
       updated: new Date().toISOString(),
       detail: "queued",
@@ -168,6 +168,34 @@ describe("application pages", () => {
 
     expect(await screen.findByText("online")).toBeDefined();
     expect(screen.getByText("12 records")).toBeDefined();
+  });
+
+  it("polls processing sources and shows real counts without claiming indexing", async () => {
+    const source = {
+      id: "pending", source_id: "pending", name: "Guide.pdf", kind: "upload", source_type: "upload",
+      status: "processing", document_count: 0, chunk_count: 0, chunks: 0, error_message: null,
+    };
+    api.listKnowledgeSources.mockResolvedValueOnce([source]).mockResolvedValue([
+      { ...source, status: "ready_for_embedding", document_count: 3, chunk_count: 5, chunks: 5 },
+    ]);
+    render(<SourcesPage />);
+    expect(await screen.findByText("Processing")).toBeDefined();
+    expect(await screen.findByText("Ready for embedding", {}, { timeout: 4000 })).toBeDefined();
+    expect(screen.getByText(/3 documents · 5 chunks/)).toBeDefined();
+    expect(screen.queryByText("Indexed")).toBeNull();
+  });
+
+  it("shows persisted source failures and upload errors", async () => {
+    api.listKnowledgeSources.mockResolvedValue([
+      { id: "failed", name: "scan.pdf", kind: "upload", status: "failed", document_count: 0, chunk_count: 0,
+        error_message: "No extractable text found." },
+    ]);
+    api.addKnowledgeSource.mockRejectedValue(new Error("Database operation unavailable"));
+    render(<SourcesPage />);
+    expect(await screen.findByText("No extractable text found.")).toBeDefined();
+    fireEvent.change(screen.getByLabelText("Documentation content"), { target: { value: "retry" } });
+    fireEvent.click(screen.getByRole("button", { name: /Add to knowledge base/ }));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("Database operation unavailable", "error"));
   });
 
   it("runs and saves a diagnosis from the main page", async () => {
