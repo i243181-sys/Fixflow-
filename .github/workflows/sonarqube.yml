@@ -17,11 +17,52 @@ jobs:
   sonar:
     runs-on: ubuntu-latest
 
+    services:
+      db:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: fixflow
+          POSTGRES_PASSWORD: fixflow
+          POSTGRES_DB: fixflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fixflow -d fixflow_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests with coverage
+        run: npm run test:coverage
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run backend tests with coverage
+        run: python -m pytest
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://fixflow:fixflow@localhost:5432/fixflow_test
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v7
