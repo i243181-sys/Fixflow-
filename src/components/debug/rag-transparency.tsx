@@ -33,7 +33,6 @@ export function RagTransparency({ rag }: { rag: Diagnosis["rag"] }) {
 
       {open && (
         <div className="ff-fade-up border-t border-border px-4 py-4">
-          {/* Pipeline flow */}
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="space-y-1">
               <FlowStep label="Query" mono value={rag.query} />
@@ -67,7 +66,6 @@ export function RagTransparency({ rag }: { rag: Diagnosis["rag"] }) {
               <FlowStep label="LLM Generation" mono value={`${rag.sourcesUsed} sources cited in answer`} />
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-3 gap-2 self-start lg:grid-cols-1">
               <Stat label="Chunks retrieved" value={rag.retrieved} />
               <Stat label="Kept after rerank" value={rag.reranked} />

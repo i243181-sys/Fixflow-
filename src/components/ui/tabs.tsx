@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 /** Lightweight tooltip using CSS-only reveal on hover/focus. */
@@ -38,7 +37,7 @@ export function Tooltip({
   );
 }
 
-export interface TabItem {
+interface TabItem {
   id: string;
   label: string;
   icon?: React.ReactNode;
@@ -90,47 +89,6 @@ export function Tabs({
           </button>
         );
       })}
-    </div>
-  );
-}
-
-export function Collapsible({
-  title,
-  icon,
-  children,
-  defaultOpen = false,
-  className,
-  headerExtra,
-}: {
-  title: React.ReactNode;
-  icon?: React.ReactNode;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-  className?: string;
-  headerExtra?: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className={cn("border border-border rounded-lg bg-panel overflow-hidden", className)}>
-      <button
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium hover:bg-white/[0.03] transition-colors"
-      >
-        <span
-          aria-hidden
-          className={cn(
-            "text-muted transition-transform duration-200",
-            open && "rotate-90"
-          )}
-        >
-          ▸
-        </span>
-        {icon}
-        <span className="flex-1">{title}</span>
-        {headerExtra}
-      </button>
-      {open && <div className="ff-fade-up px-4 pb-4">{children}</div>}
     </div>
   );
 }

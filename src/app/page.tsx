@@ -15,62 +15,80 @@ function DebugSessionContent() {
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState(0);
-
-
-
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<string[]>([]);
   const [techs, setTechs] = useState<TechOption[]>([]);
   const [repoUrl, setRepoUrl] = useState("");
   const [rightOpen, setRightOpen] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
+  const diagnosisRequest = useRef<AbortController | null>(null);
+  const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { toast } = useToast();
   const params = useSearchParams();
 
-  // Reopening a past session
   useEffect(() => {
     const sid = params.get("session");
     if (sid) {
-      let active = true;
-      getSession(sid).then((session) => {
-        if (!active) return;
-        if (session) {
-          setDiagnosis(session);
-          setTechs((session.detected as TechOption[]) ?? []);
-          toast(`Reopened session "${sid}"`, "info");
-        } else {
-          setError("That debug session could not be found.");
-        }
-      }).catch(() => {
-        if (active) setError("Could not reopen that debug session.");
-      });
-      return () => { active = false; };
+      const controller = new AbortController();
+      void getSession(sid, controller.signal)
+        .then((session) => {
+          if (session) {
+            setDiagnosis(session);
+            setTechs((session.detected as TechOption[]) ?? []);
+            toast(`Reopened session "${sid}"`, "info");
+          } else {
+            setError("That debug session could not be found.");
+          }
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) {
+            setError("Could not reopen that debug session.");
+          }
+        });
+      return () => controller.abort();
     }
   }, [params, toast]);
 
+  useEffect(
+    () => () => {
+      diagnosisRequest.current?.abort();
+      if (scrollTimer.current) clearTimeout(scrollTimer.current);
+    },
+    []
+  );
+
   const runPipeline = useCallback(async (req: DebugRequest) => {
+    diagnosisRequest.current?.abort();
+    if (scrollTimer.current) clearTimeout(scrollTimer.current);
+    const controller = new AbortController();
+    diagnosisRequest.current = controller;
     setBusy(true);
     setError(null);
     setDiagnosis(null);
     setStep(0);
     const timer = setInterval(() => setStep((s) => Math.min(s + 1, 6)), 380);
     try {
-      const d = await diagnose(req);
-      setDiagnosis(d);
+      const result = await diagnose(req, controller.signal);
+      if (controller.signal.aborted) return;
+      setDiagnosis(result);
       setRightOpen(true);
-      setTimeout(
+      scrollTimer.current = setTimeout(
         () => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
         100
       );
     } catch {
-      setError("Diagnosis failed. Check your inputs and try again.");
+      if (!controller.signal.aborted) {
+        setError("Diagnosis failed. Check your inputs and try again.");
+      }
     } finally {
       clearInterval(timer);
-      setBusy(false);
+      if (diagnosisRequest.current === controller) {
+        diagnosisRequest.current = null;
+        setBusy(false);
+      }
     }
   }, []);
 
-  const applyPatch = () => toast("Patch staged for app/api/routes/tasks.py (mock)", "success");
   const saveSolution = async () => {
     if (!diagnosis) return;
     try {
@@ -89,7 +107,7 @@ function DebugSessionContent() {
 
   return (
     <AppShell
-      sessionTitle={diagnosis ? "FastAPI RuntimeError · asyncio" : "New Debug Session"}
+      sessionTitle={diagnosis ? `${diagnosis.detected.slice(0, 2).join(" · ")} diagnosis` : "New Debug Session"}
       techs={techs.length ? techs : (diagnosis?.detected ?? [])}
       rightPanel={
         <RightPanel
@@ -105,7 +123,6 @@ function DebugSessionContent() {
       onToggleRightPanel={() => setRightOpen((o) => !o)}
     >
       <div className="mx-auto max-w-3xl space-y-5 px-4 py-8 max-xl:max-w-4xl xl:px-8">
-        {/* Hero */}
         <div className="ff-grid-bg rounded-xl border border-border px-5 py-7 text-center sm:px-8">
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
             Debug smarter. <span className="text-accent">Fix faster.</span>
@@ -124,7 +141,6 @@ function DebugSessionContent() {
           onRepoChange={setRepoUrl}
         />
 
-        {/* Pipeline / Result */}
         <div ref={resultRef}>
           {busy && <PipelineProgress currentStep={step} />}
           {error && !busy && (
@@ -155,7 +171,6 @@ function DebugSessionContent() {
           {diagnosis && !busy && (
             <DiagnosisResult
               diagnosis={diagnosis}
-              onApplyPatch={applyPatch}
               onSaved={saveSolution}
             />
           )}

@@ -14,7 +14,13 @@ export default function HistoryPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    listSessions().then(setSessions).catch(() => setError("Could not load debug history."));
+    const controller = new AbortController();
+    void listSessions(controller.signal)
+      .then(setSessions)
+      .catch(() => {
+        if (!controller.signal.aborted) setError("Could not load debug history.");
+      });
+    return () => controller.abort();
   }, []);
 
   return (

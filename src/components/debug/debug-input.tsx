@@ -110,7 +110,6 @@ export function DebugInput({
       aria-label="Debug input"
       className="overflow-visible rounded-xl border border-border bg-panel shadow-lg shadow-black/20"
     >
-      {/* Tabs */}
       <div className="flex items-center pr-2">
         <Tabs
           size="sm"
@@ -227,7 +226,6 @@ export function DebugInput({
         )}
       </div>
 
-      {/* Footer: tech selector + actions */}
       <div className="flex flex-col gap-3 border-t border-border bg-panel-2/50 px-4 py-3 sm:flex-row sm:items-center">
         <div className="relative min-w-0 flex-1">
           <button

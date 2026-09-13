@@ -13,12 +13,10 @@ import {
   PanelLeftOpen,
   Plus,
   Settings,
-  Zap,
 } from "lucide-react";
 import { cn, timeAgo } from "@/lib/utils";
 import { listSessions } from "@/lib/api";
 import type { DebugSession } from "@/lib/types";
-import { Badge } from "@/components/ui/badge";
 import { Tooltip } from "@/components/ui/tabs";
 
 export function MobileNavButton({ onClick }: { onClick: () => void }) {
@@ -65,18 +63,21 @@ export function Sidebar({
   }, []);
 
   useEffect(() => {
-    listSessions()
+    const controller = new AbortController();
+    void listSessions(controller.signal)
       .then((items) => {
         startTransition(() => setSessions(items.slice(0, 4)));
       })
       .catch(() => {
-        startTransition(() => setSessions([]));
+        if (!controller.signal.aborted) {
+          startTransition(() => setSessions([]));
+        }
       });
+    return () => controller.abort();
   }, []);
 
   return (
     <>
-      {/* Mobile scrim */}
       <div
         aria-hidden
         onClick={onMobileClose}
@@ -93,7 +94,6 @@ export function Sidebar({
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         )}
       >
-        {/* Logo */}
         <div className="flex h-14 items-center gap-2.5 border-b border-border px-4">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent/15 text-accent">
             <Bug size={18} strokeWidth={2.2} />
@@ -120,7 +120,6 @@ export function Sidebar({
           </button>
         </div>
 
-        {/* Nav */}
         <nav className="flex flex-col gap-0.5 p-2" aria-label="Main">
           {NAV.map((item) => {
             const active =
@@ -152,7 +151,6 @@ export function Sidebar({
           })}
         </nav>
 
-        {/* Recent sessions */}
         {!collapsed && (
           <div className="mt-2 flex min-h-0 flex-1 flex-col border-t border-border">
             <p className="px-4 pb-1.5 pt-3 text-[11px] font-medium uppercase tracking-wider text-muted/70">
@@ -185,15 +183,6 @@ export function Sidebar({
                   </span>
                 </Link>
               ))}
-            </div>
-            <div className="border-t border-border p-3">
-              <div className="flex items-center gap-2 rounded-md bg-panel px-2.5 py-2 text-[11px] text-muted">
-                <Zap size={13} className="text-lime" />
-                <span>Hybrid retrieval ready</span>
-                <Badge tone="lime" className="ml-auto">
-                  8 idx
-                </Badge>
-              </div>
             </div>
           </div>
         )}

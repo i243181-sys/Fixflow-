@@ -9,52 +9,80 @@ import type {
   ChatMessage,
   DebugSession,
   Diagnosis,
+  KnowledgeSource,
   SavedSolution,
   SourceType,
 } from "./types";
 
-/**
- * FixFlow service layer.
- *
- * All UI reads/writes go through these functions only. Today they resolve
- * locally with simulated latency; when the FastAPI backend is available,
- * each function swaps to a `fetch` call (see the // fastapi: comments)
- * without any component changes.
- *
- * Target endpoints:
- *   POST /api/debug            -> diagnose()
- *   POST /api/chat             -> sendFollowUp()
- *   POST /api/documents        -> addKnowledgeSource()
- *   GET  /api/sessions         -> listSessions()
- *   GET  /api/sessions/{id}    -> getSession()
- *   GET  /api/sources          -> listKnowledgeSources()
- */
-
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function checkBackendHealth(): Promise<{ status: string; service: string }> {
-  return apiFetch<{ status: string; service: string }>("/health");
+function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const complete = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const abort = () => {
+      clearTimeout(timeout);
+      reject(signal?.reason);
+    };
+    const timeout = setTimeout(complete, milliseconds);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+export async function checkBackendHealth(
+  signal?: AbortSignal
+): Promise<{ status: string; service: string }> {
+  return apiFetch<{ status: string; service: string }>("/health", { signal });
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  if (!API_URL) throw new Error("NEXT_PUBLIC_API_URL is not configured");
+  if (!API_URL) {
+    throw new Error("NEXT_PUBLIC_API_URL is not configured");
+  }
+  const headers = new Headers(init?.headers);
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   let response: Response;
   try {
     response = await fetch(`${API_URL}${path}`, {
-      headers: { "Content-Type": "application/json", ...init?.headers },
       ...init,
+      headers,
     });
-  } catch {
-    throw new Error("Could not connect to the FixFlow backend.");
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw new Error("Could not connect to the FixFlow backend.", { cause: error });
   }
-  const body = await response.json().catch(() => null);
+  const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const message =
-      body?.error?.message || body?.detail || `API request failed (${response.status})`;
-    throw new Error(message);
+    throw new Error(apiErrorMessage(body, response.status));
   }
   return body as T;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function apiErrorMessage(body: unknown, status: number): string {
+  if (isRecord(body)) {
+    if (typeof body.detail === "string") return body.detail;
+    if (isRecord(body.error) && typeof body.error.message === "string") {
+      return body.error.message;
+    }
+    if (typeof body.error === "string") return body.error;
+  }
+  return `API request failed (${status})`;
 }
 
 export interface DebugRequest {
@@ -66,10 +94,11 @@ export interface DebugRequest {
   files?: File[];
 }
 
-export async function diagnose(req: DebugRequest): Promise<Diagnosis> {
+export async function diagnose(req: DebugRequest, signal?: AbortSignal): Promise<Diagnosis> {
   if (API_URL) {
     return apiFetch<Diagnosis>("/api/debug", {
       method: "POST",
+      signal,
       body: JSON.stringify({
         error: req.error,
         code: req.code,
@@ -79,7 +108,7 @@ export async function diagnose(req: DebugRequest): Promise<Diagnosis> {
       }),
     });
   }
-  await delay(2800);
+  await delay(2800, signal);
   if (!req.error && !req.code && !req.context) {
     throw new Error("No error, code or context provided.");
   }
@@ -88,17 +117,17 @@ export async function diagnose(req: DebugRequest): Promise<Diagnosis> {
 
 export async function sendFollowUp(
   question: string,
-  _sessionId: string
+  sessionId: string,
+  signal?: AbortSignal
 ): Promise<ChatMessage> {
-  void question;
-  void _sessionId;
   if (API_URL) {
     return apiFetch<ChatMessage>("/api/chat", {
       method: "POST",
-      body: JSON.stringify({ question, session_id: _sessionId }),
+      signal,
+      body: JSON.stringify({ question, session_id: sessionId }),
     });
   }
-  await delay(1400);
+  await delay(1400, signal);
   const reply = MOCK_CHAT_REPLIES.default;
   return {
     id: `c-${Date.now()}`,
@@ -108,37 +137,27 @@ export async function sendFollowUp(
   };
 }
 
-export async function listSessions(): Promise<DebugSession[]> {
+export async function listSessions(signal?: AbortSignal): Promise<DebugSession[]> {
   if (API_URL) {
-    return apiFetch<DebugSession[]>("/api/sessions");
+    return apiFetch<DebugSession[]>("/api/sessions", { signal });
   }
-  await delay(400);
+  await delay(400, signal);
   return MOCK_SESSIONS;
 }
 
-export async function getSession(id: string): Promise<Diagnosis | null> {
+export async function getSession(id: string, signal?: AbortSignal): Promise<Diagnosis | null> {
   if (API_URL) {
-    return apiFetch<Diagnosis>(`/api/sessions/${id}`);
+    return apiFetch<Diagnosis>(`/api/sessions/${encodeURIComponent(id)}`, { signal });
   }
-  await delay(300);
+  await delay(300, signal);
   return MOCK_SESSIONS.find((s) => s.id === id) ? ASYNCIO_DIAGNOSIS : null;
 }
 
-export interface KnowledgeSource {
-  id: string;
-  name: string;
-  kind: "docs" | "github" | "community" | "upload";
-  status: "indexed" | "indexing" | "queued" | "error";
-  chunks: number;
-  updated: string;
-  detail: string;
-}
-
-export async function listKnowledgeSources(): Promise<KnowledgeSource[]> {
+export async function listKnowledgeSources(signal?: AbortSignal): Promise<KnowledgeSource[]> {
   if (API_URL) {
-    return apiFetch<KnowledgeSource[]>("/api/sources");
+    return apiFetch<KnowledgeSource[]>("/api/sources", { signal });
   }
-  await delay(350);
+  await delay(350, signal);
   return MOCK_KNOWLEDGE.map((source, index) => ({
     id: `knowledge-${index + 1}`,
     ...source,
@@ -163,7 +182,10 @@ export async function addKnowledgeSource(input: {
       method: "POST",
       body: form,
     });
-    if (!response.ok) throw new Error(`Document upload failed (${response.status})`);
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null);
+      throw new Error(apiErrorMessage(body, response.status));
+    }
     return response.json() as Promise<KnowledgeSource>;
   }
   await delay(900);
@@ -178,11 +200,11 @@ export async function addKnowledgeSource(input: {
   };
 }
 
-export async function listSaved(): Promise<SavedSolution[]> {
+export async function listSaved(signal?: AbortSignal): Promise<SavedSolution[]> {
   if (API_URL) {
-    return apiFetch<SavedSolution[]>("/api/saved");
+    return apiFetch<SavedSolution[]>("/api/saved", { signal });
   }
-  await delay(300);
+  await delay(300, signal);
   return MOCK_SAVED;
 }
 

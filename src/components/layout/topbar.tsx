@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   SignInButton,
   SignUpButton,
@@ -11,6 +12,17 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip } from "@/components/ui/tabs";
 import { MobileNavButton } from "./sidebar";
 import { useTheme } from "./theme-provider";
+import { checkBackendHealth } from "@/lib/api";
+
+function connectionDetails(online: boolean | null) {
+  if (online === null) {
+    return { label: "Checking backend", text: "Checking" };
+  }
+  if (online) {
+    return { label: "Connected to retrieval backend", text: "Connected" };
+  }
+  return { label: "Offline — mock mode", text: "Offline" };
+}
 
 export function TopBar({
   sessionTitle,
@@ -28,7 +40,19 @@ export function TopBar({
   showRightToggle: boolean;
 }) {
   const { dark, toggle } = useTheme();
-  const online = true;
+  const [online, setOnline] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void checkBackendHealth(controller.signal)
+      .then(() => setOnline(true))
+      .catch(() => {
+        if (!controller.signal.aborted) setOnline(false);
+      });
+    return () => controller.abort();
+  }, []);
+
+  const connection = connectionDetails(online);
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface/80 px-3 sm:px-4">
@@ -40,7 +64,7 @@ export function TopBar({
             {sessionTitle}
           </p>
           <p className="text-[11px] text-muted leading-tight">
-            session · autosaved
+            current workspace session
           </p>
         </div>
         {techs.length > 0 && (
@@ -55,19 +79,19 @@ export function TopBar({
       </div>
 
       <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
-        <Tooltip label={online ? "Connected to retrieval backend" : "Offline — mock mode"} side="bottom">
+        <Tooltip label={connection.label} side="bottom">
           <span className="flex items-center gap-1.5 rounded-md border border-border bg-panel px-2 py-1 text-[11px] text-muted">
             {online ? (
               <Wifi size={13} className="text-success" />
             ) : (
-              <WifiOff size={13} className="text-warning" />
+              <WifiOff size={13} className={online === null ? "text-muted" : "text-warning"} />
             )}
             <span className="hidden sm:inline">
-              {online ? "Connected" : "Offline"}
+              {connection.text}
             </span>
             <span
               aria-hidden
-              className="ff-pulse-dot h-1.5 w-1.5 rounded-full bg-success"
+              className={online ? "ff-pulse-dot h-1.5 w-1.5 rounded-full bg-success" : "h-1.5 w-1.5 rounded-full bg-warning"}
             />
           </span>
         </Tooltip>

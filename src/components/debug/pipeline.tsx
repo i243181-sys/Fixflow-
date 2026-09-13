@@ -3,7 +3,7 @@
 import { BookOpen, Check, GitBranch, ListChecks, Search, Braces, MessagesSquare, BrainCircuit, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export const PIPELINE_STEPS = [
+const PIPELINE_STEPS = [
   { id: "understand", label: "Understanding error", icon: Braces },
   { id: "docs", label: "Searching documentation", icon: BookOpen },
   { id: "github", label: "Searching GitHub issues", icon: GitBranch },
@@ -28,7 +28,6 @@ export function PipelineProgress({ currentStep }: { currentStep: number }) {
         </span>
       </div>
 
-      {/* Progress bar */}
       <div className="mb-4 h-1 overflow-hidden rounded-full bg-panel-2">
         <div
           className="h-full rounded-full bg-accent transition-all duration-500 ease-out"

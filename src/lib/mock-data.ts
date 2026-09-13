@@ -1,4 +1,4 @@
-import type { Diagnosis, KnowledgeIndex } from "./types";
+import type { Diagnosis, MockKnowledgeSource } from "./types";
 
 const now = Date.now();
 const ago = (ms: number) => new Date(now - ms).toISOString();
@@ -233,7 +233,7 @@ export const MOCK_SESSIONS: DebugSession[] = [
   },
 ];
 
-export const MOCK_KNOWLEDGE: KnowledgeIndex[] = [
+export const MOCK_KNOWLEDGE: MockKnowledgeSource[] = [
   { name: "FastAPI Docs", kind: "docs", status: "indexed", chunks: 4820, updated: ago(1000 * 60 * 60 * 3), detail: "https://fastapi.tiangolo.com" },
   { name: "Python Docs", kind: "docs", status: "indexed", chunks: 12480, updated: ago(1000 * 60 * 60 * 20), detail: "https://docs.python.org/3" },
   { name: "PostgreSQL Docs", kind: "docs", status: "indexed", chunks: 8210, updated: ago(1000 * 60 * 60 * 27), detail: "https://www.postgresql.org/docs/current/" },

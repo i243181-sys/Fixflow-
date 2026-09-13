@@ -15,21 +15,22 @@ const BASH_KEYWORDS =
 const SQL_KEYWORDS =
   "SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|INDEX|JOIN|LEFT|RIGHT|INNER|ON|GROUP|BY|ORDER|LIMIT|OFFSET|AND|OR|NOT|NULL|PRIMARY|KEY|FOREIGN|REFERENCES|ALTER|DROP|AS";
 
-const KEYWORDS: Record<Lang, string> = {
-  python: PY_KEYWORDS,
-  typescript: JS_KEYWORDS,
-  javascript: JS_KEYWORDS,
-  bash: BASH_KEYWORDS,
-  sql: SQL_KEYWORDS,
+const KEYWORDS: Record<Lang, Set<string>> = {
+  python: new Set(PY_KEYWORDS.split("|")),
+  typescript: new Set(JS_KEYWORDS.split("|")),
+  javascript: new Set(JS_KEYWORDS.split("|")),
+  bash: new Set(BASH_KEYWORDS.split("|")),
+  sql: new Set(SQL_KEYWORDS.split("|")),
 };
 
-const BUILTINS: Record<Lang, string> = {
-  python:
-    "print|len|range|str|int|float|bool|list|dict|set|tuple|open|super|isinstance|getattr|setattr|asyncio|loop|self",
-  typescript: "console|window|document|React|Array|Object|JSON|Promise|Map|Set|Number|String",
-  javascript: "console|window|document|React|Array|Object|JSON|Promise|Map|Set",
-  bash: "",
-  sql: "",
+const BUILTINS: Record<Lang, Set<string>> = {
+  python: new Set(
+    "print|len|range|str|int|float|bool|list|dict|set|tuple|open|super|isinstance|getattr|setattr|asyncio|loop|self".split("|")
+  ),
+  typescript: new Set("console|window|document|React|Array|Object|JSON|Promise|Map|Set|Number|String".split("|")),
+  javascript: new Set("console|window|document|React|Array|Object|JSON|Promise|Map|Set".split("|")),
+  bash: new Set(),
+  sql: new Set(),
 };
 
 interface Token {
@@ -48,31 +49,44 @@ const TOKEN_RE = new RegExp(
   "g"
 );
 
-function tokenizeLine(line: string, lang: Lang): Token[] {
+function wordClass(word: string, line: string, index: number, language: Lang): string {
+  if (KEYWORDS[language].has(word)) return "keyword";
+  if (BUILTINS[language].has(word)) return "builtin";
+  if (/^[A-Z]/.test(word) || (word.length > 2 && line[index + word.length] === "(")) {
+    return "func";
+  }
+  return "";
+}
+
+function matchedToken(
+  groups: Record<string, string | undefined>,
+  line: string,
+  index: number,
+  language: Lang
+): Token | null {
+  if (groups.comment) return { cls: "comment", text: groups.comment };
+  if (groups.string) return { cls: "string", text: groups.string };
+  if (groups.decorator) return { cls: "decorator", text: groups.decorator };
+  if (groups.number) return { cls: "number", text: groups.number };
+  if (groups.word) {
+    return { cls: wordClass(groups.word, line, index, language), text: groups.word };
+  }
+  return null;
+}
+
+function tokenizeLine(line: string, language: Lang): Token[] {
   const tokens: Token[] = [];
   let last = 0;
-  for (const m of line.matchAll(TOKEN_RE)) {
-    const idx = m.index ?? 0;
-    if (idx > last) tokens.push({ cls: "", text: line.slice(last, idx) });
-    const g = m.groups!;
-    if (g.comment) tokens.push({ cls: "comment", text: g.comment });
-    else if (g.string) tokens.push({ cls: "string", text: g.string });
-    else if (g.decorator) tokens.push({ cls: "decorator", text: g.decorator });
-    else if (g.number) tokens.push({ cls: "number", text: g.number });
-    else if (g.word) {
-      const w = g.word;
-      const cls = KEYWORDS[lang].split("|").includes(w)
-        ? "keyword"
-        : BUILTINS[lang].split("|").includes(w)
-          ? "builtin"
-          : /^[A-Z]/.test(w)
-            ? "func"
-            : w.length > 2 && line[idx + w.length] === "("
-              ? "func"
-              : "";
-      tokens.push({ cls, text: w });
+  for (const match of line.matchAll(TOKEN_RE)) {
+    const index = match.index ?? 0;
+    if (index > last) {
+      tokens.push({ cls: "", text: line.slice(last, index) });
     }
-    last = idx + m[0].length;
+    if (match.groups) {
+      const token = matchedToken(match.groups, line, index, language);
+      if (token) tokens.push(token);
+    }
+    last = index + match[0].length;
   }
   if (last < line.length) tokens.push({ cls: "", text: line.slice(last) });
   return tokens;

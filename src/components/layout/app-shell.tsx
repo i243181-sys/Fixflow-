@@ -34,7 +34,6 @@ export function AppShell({
   const meta = PAGE_META[pathname] ?? PAGE_META["/"];
   const showRightToggle = Boolean(onToggleRightPanel);
 
-  // Close mobile sidebar on route change
   useEffect(() => {
     const close = window.requestAnimationFrame(() => setMobileOpen(false));
     return () => window.cancelAnimationFrame(close);

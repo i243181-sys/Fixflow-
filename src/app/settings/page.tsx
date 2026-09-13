@@ -21,26 +21,42 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/components/layout/theme-provider";
 import { checkBackendHealth, listKnowledgeSources } from "@/lib/api";
-import type { KnowledgeSource } from "@/lib/api";
+import type { KnowledgeSource } from "@/lib/types";
+
+const BACKEND_TONE = {
+  checking: "warning",
+  online: "success",
+  offline: "danger",
+} as const;
 
 export default function SettingsPage() {
   const { dark, toggle } = useTheme();
   const [backend, setBackend] = useState<"checking" | "online" | "offline">("checking");
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
 
-  const checkConnection = () => {
+  const checkConnection = (signal?: AbortSignal) => {
     setBackend("checking");
-    void checkBackendHealth()
+    void checkBackendHealth(signal)
       .then(() => setBackend("online"))
-      .catch(() => setBackend("offline"));
+      .catch(() => {
+        if (!signal?.aborted) setBackend("offline");
+      });
   };
 
   useEffect(() => {
+    const controller = new AbortController();
     const initialize = window.setTimeout(() => {
-      checkConnection();
-      void listKnowledgeSources().then(setSources).catch(() => setSources([]));
+      checkConnection(controller.signal);
+      void listKnowledgeSources(controller.signal)
+        .then(setSources)
+        .catch(() => {
+          if (!controller.signal.aborted) setSources([]);
+        });
     }, 0);
-    return () => window.clearTimeout(initialize);
+    return () => {
+      controller.abort();
+      window.clearTimeout(initialize);
+    };
   }, []);
 
   return (
@@ -77,13 +93,13 @@ export default function SettingsPage() {
               <h2 className="text-sm font-semibold">Backend connection</h2>
               <p className="mt-1 text-xs text-muted">FastAPI health endpoint</p>
             </div>
-            <Badge tone={backend === "online" ? "success" : backend === "offline" ? "danger" : "warning"}>
+            <Badge tone={BACKEND_TONE[backend]}>
               {backend}
             </Badge>
           </div>
           <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
             <p className="font-mono text-[11px] text-muted">{process.env.NEXT_PUBLIC_API_URL || "Backend URL not configured"}</p>
-            <Button variant="outline" size="sm" onClick={checkConnection} loading={backend === "checking"}>
+            <Button variant="outline" size="sm" onClick={() => checkConnection()} loading={backend === "checking"}>
               Check connection
             </Button>
           </div>
@@ -138,7 +154,7 @@ export default function SettingsPage() {
               </div>
             </Show>
           </div>
-          <a href="https://dashboard.clerk.com" target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-1.5 text-xs text-muted hover:text-foreground">
+          <a href="https://dashboard.clerk.com" target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex items-center gap-1.5 text-xs text-muted hover:text-foreground">
             Open Clerk dashboard <ExternalLink size={12} />
           </a>
         </section>

@@ -12,7 +12,13 @@ export default function SavedPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    listSaved().then(setSolutions).catch(() => setError("Could not load saved solutions."));
+    const controller = new AbortController();
+    void listSaved(controller.signal)
+      .then(setSolutions)
+      .catch(() => {
+        if (!controller.signal.aborted) setError("Could not load saved solutions.");
+      });
+    return () => controller.abort();
   }, []);
 
   return (

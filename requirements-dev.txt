@@ -1,0 +1,9 @@
+-r backend/requirements.txt
+-r requirements-ingestion.txt
+
+bandit>=1.9
+mypy>=2.3
+pip-audit>=2.10
+pytest>=9.0
+pytest-cov>=7.0
+ruff>=0.16

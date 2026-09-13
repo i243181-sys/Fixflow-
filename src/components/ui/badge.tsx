@@ -30,7 +30,3 @@ export function Badge({
     </span>
   );
 }
-
-export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("ff-skeleton", className)} aria-hidden />;
-}

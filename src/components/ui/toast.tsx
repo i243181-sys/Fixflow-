@@ -4,6 +4,8 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -24,15 +26,29 @@ export const useToast = () => useContext(ToastCtx);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const nextId = useRef(0);
+  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
 
-  const toast = useCallback((message: string, kind: ToastKind = "info") => {
-    const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, kind, message }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
+  const dismiss = useCallback((id: number) => {
+    const timer = timers.current.get(id);
+    if (timer) clearTimeout(timer);
+    timers.current.delete(id);
+    setToasts((current) => current.filter((item) => item.id !== id));
   }, []);
 
-  const dismiss = (id: number) =>
-    setToasts((t) => t.filter((x) => x.id !== id));
+  const toast = useCallback((message: string, kind: ToastKind = "info") => {
+    const id = ++nextId.current;
+    setToasts((current) => [...current, { id, kind, message }]);
+    timers.current.set(id, setTimeout(dismiss, 4000, id));
+  }, [dismiss]);
+
+  useEffect(() => {
+    const activeTimers = timers.current;
+    return () => {
+      activeTimers.forEach(clearTimeout);
+      activeTimers.clear();
+    };
+  }, []);
 
   return (
     <ToastCtx.Provider value={{ toast }}>

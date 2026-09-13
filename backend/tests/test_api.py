@@ -1,28 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.main import app
 from backend.services import store
-
-
-@pytest.fixture(autouse=True)
-def reset_store() -> Iterator[None]:
-    store._sessions.clear()
-    store._sources.clear()
-    store._saved.clear()
-    yield
-    store._sessions.clear()
-    store._sources.clear()
-    store._saved.clear()
-
-
-@pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
 
 
 def test_health(client: TestClient) -> None:
@@ -40,7 +23,10 @@ def test_debug_chat_and_session(client: TestClient) -> None:
 
     chat = client.post(
         "/api/chat",
-        json={"session_id": diagnosis["sessionId"], "question": "How does the asyncio event loop work?"},
+        json={
+            "session_id": diagnosis["sessionId"],
+            "question": "How does the asyncio event loop work?",
+        },
     )
     assert chat.status_code == 200
     assert chat.json()["role"] == "fixflow"
@@ -56,9 +42,7 @@ def test_invalid_requests_use_safe_errors(client: TestClient) -> None:
     assert empty.status_code == 422
     assert empty.json()["error"]["code"] == "HTTP_ERROR"
 
-    missing_chat = client.post(
-        "/api/chat", json={"session_id": "missing", "question": "hello"}
-    )
+    missing_chat = client.post("/api/chat", json={"session_id": "missing", "question": "hello"})
     assert missing_chat.status_code == 404
     assert missing_chat.json()["error"]["code"] == "HTTP_ERROR"
 
@@ -66,8 +50,16 @@ def test_invalid_requests_use_safe_errors(client: TestClient) -> None:
     assert invalid_chat.status_code == 422
     assert invalid_chat.json()["error"]["code"] == "VALIDATION_ERROR"
 
+    blank_chat = client.post("/api/chat", json={"session_id": "x", "question": "   "})
+    assert blank_chat.status_code == 422
 
-def test_upload_validation_and_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_upload_validation_and_success(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(store, "UPLOAD_DIR", tmp_path / "uploads")
     unsupported = client.post(
         "/api/documents",
         files={"file": ("payload.exe", b"bad", "application/octet-stream")},
@@ -98,6 +90,15 @@ def test_upload_validation_and_success(client: TestClient, monkeypatch: pytest.M
     )
     assert duplicate.status_code == 409
 
+    long_name = client.post(
+        "/api/documents",
+        files={"file": (f"{'a' * 300}.md", b"different content", "text/markdown")},
+        data={"kind": "upload"},
+    )
+    assert long_name.status_code == 200
+    assert len(long_name.json()["name"]) == 255
+    assert long_name.json()["name"].endswith(".md")
+
 
 def test_cors(client: TestClient) -> None:
     response = client.options(
@@ -109,3 +110,4 @@ def test_cors(client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "access-control-allow-credentials" not in response.headers

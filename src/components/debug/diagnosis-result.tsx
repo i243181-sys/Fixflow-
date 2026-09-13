@@ -24,7 +24,8 @@ import { CodeBlock } from "@/components/ui/code-block";
 import { useToast } from "@/components/ui/toast";
 import type { Diagnosis, SourceType } from "@/lib/types";
 import { SOURCE_TYPE_LABEL } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { diagnosisMarkdown } from "@/lib/diagnosis";
+import { cn, safeExternalUrl } from "@/lib/utils";
 import { RagTransparency } from "./rag-transparency";
 import { FollowUpChat } from "./followup-chat";
 
@@ -41,26 +42,31 @@ const TYPE_TONE: Record<SourceType, string> = {
   community: "text-warning",
   code: "text-success",
 };
+
+const SOURCE_FILTERS: { id: SourceType | "all"; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "docs", label: "Documentation" },
+  { id: "github", label: "GitHub" },
+  { id: "community", label: "Community" },
+  { id: "code", label: "Code" },
+];
+
+function relevanceTone(relevance: number): string {
+  if (relevance >= 90) return "bg-lime";
+  if (relevance >= 80) return "bg-accent";
+  return "bg-warning";
+}
+
 export function DiagnosisResult({
   diagnosis,
-  onApplyPatch,
   onSaved,
 }: {
   diagnosis: Diagnosis;
-  onApplyPatch: () => void;
   onSaved: () => void;
 }) {
   const [sourceFilter, setSourceFilter] = useState<SourceType | "all">("all");
   const [expanded, setExpanded] = useState<string[]>([diagnosis.sources[0]?.id ?? ""]);
   const { toast } = useToast();
-
-  const filters: { id: SourceType | "all"; label: string }[] = [
-    { id: "all", label: "All" },
-    { id: "docs", label: "Documentation" },
-    { id: "github", label: "GitHub" },
-    { id: "community", label: "Community" },
-    { id: "code", label: "Code" },
-  ];
 
   const visible = useMemo(
     () =>
@@ -73,9 +79,17 @@ export function DiagnosisResult({
   const toggleSource = (id: string) =>
     setExpanded((e) => (e.includes(id) ? e.filter((x) => x !== id) : [...e, id]));
 
+  const exportDiagnosis = async () => {
+    try {
+      await navigator.clipboard.writeText(diagnosisMarkdown(diagnosis));
+      toast("Diagnosis report copied as Markdown", "success");
+    } catch {
+      toast("Could not copy the diagnosis report", "error");
+    }
+  };
+
   return (
     <div className="space-y-4">
-      {/* Summary */}
       <section aria-label="Diagnosis summary" className="ff-fade-up rounded-xl border border-success/25 bg-panel p-4 sm:p-5">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="flex items-center gap-2.5">
@@ -117,14 +131,13 @@ export function DiagnosisResult({
             <Button variant="outline" size="sm" onClick={onSaved}>
               <BookmarkPlus size={14} /> Save
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => toast("Diagnosis report copied as Markdown", "success")}>
+            <Button variant="secondary" size="sm" onClick={exportDiagnosis}>
               Export
             </Button>
           </div>
         </div>
       </section>
 
-      {/* Root cause + why */}
       <div className="grid gap-4 lg:grid-cols-2">
         <ResultCard icon={<Target size={15} className="text-accent" />} title="Root Cause">
           <p className="text-sm leading-relaxed text-foreground/85">{diagnosis.rootCause}</p>
@@ -134,11 +147,10 @@ export function DiagnosisResult({
         </ResultCard>
       </div>
 
-      {/* Recommended fix */}
       <ResultCard icon={<Wrench size={15} className="text-accent" />} title="Recommended Fix">
         <ol className="space-y-2.5">
           {diagnosis.recommendedFix.map((step, i) => (
-            <li key={i} className="flex gap-3">
+            <li key={`${step.title}:${step.detail}`} className="flex gap-3">
               <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-accent/15 font-mono text-[11px] font-semibold text-accent">
                 {i + 1}
               </span>
@@ -151,15 +163,11 @@ export function DiagnosisResult({
         </ol>
       </ResultCard>
 
-      {/* Code fix */}
       <ResultCard icon={<GitBranch size={15} className="text-lime" />} title="Code Fix">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="muted" className="font-mono">{diagnosis.codeFix.file}</Badge>
             <Badge tone="muted" className="font-mono">{diagnosis.codeFix.lines}</Badge>
-            <Button size="sm" variant="outline" className="ml-auto" onClick={() => onApplyPatch()}>
-              Apply Patch
-            </Button>
           </div>
           <div>
             <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-danger">
@@ -176,7 +184,6 @@ export function DiagnosisResult({
         </div>
       </ResultCard>
 
-      {/* Alternatives */}
       <section aria-label="Alternative fixes" className="rounded-xl border border-border bg-panel">
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
           <Scale size={15} className="text-warning" />
@@ -184,8 +191,8 @@ export function DiagnosisResult({
           <Badge tone="muted" className="ml-1">{diagnosis.alternatives.length}</Badge>
         </div>
         <div className="divide-y divide-border">
-          {diagnosis.alternatives.map((alt, i) => (
-            <details key={i} className="group">
+          {diagnosis.alternatives.map((alt) => (
+            <details key={`${alt.title}:${alt.summary}`} className="group">
               <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 text-sm font-medium transition-colors hover:bg-white/[0.03] [&::-webkit-details-marker]:hidden">
                 <ChevronRight size={14} className="text-muted transition-transform group-open:rotate-90" />
                 {alt.title}
@@ -202,14 +209,13 @@ export function DiagnosisResult({
         </div>
       </section>
 
-      {/* Sources */}
       <section aria-label="Evidence and sources" className="rounded-xl border border-border bg-panel">
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
           <Search size={15} className="text-accent" />
           <h3 className="text-sm font-semibold">Evidence / Sources</h3>
           <Badge tone="accent" className="ml-1">{diagnosis.sources.length}</Badge>
           <div className="ml-auto flex flex-wrap gap-1" role="group" aria-label="Filter sources">
-            {filters.map((f) => (
+            {SOURCE_FILTERS.map((f) => (
               <button
                 key={f.id}
                 onClick={() => setSourceFilter(f.id)}
@@ -232,6 +238,7 @@ export function DiagnosisResult({
           ) : (
             visible.map((s) => {
               const open = expanded.includes(s.id);
+              const sourceUrl = safeExternalUrl(s.url);
               return (
                 <div key={s.id} className={cn("transition-colors hover:bg-white/[0.02]", s.used && "border-l-2 border-l-accent/60")}>
                   <button
@@ -255,7 +262,7 @@ export function DiagnosisResult({
                       <span className="font-mono text-xs font-semibold text-foreground/80">{s.relevance}%</span>
                       <span className="h-1 w-16 overflow-hidden rounded-full bg-panel-2">
                         <span
-                          className={cn("block h-full rounded-full", s.relevance >= 90 ? "bg-lime" : s.relevance >= 80 ? "bg-accent" : "bg-warning")}
+                          className={cn("block h-full rounded-full", relevanceTone(s.relevance))}
                           style={{ width: `${s.relevance}%` }}
                         />
                       </span>
@@ -266,14 +273,16 @@ export function DiagnosisResult({
                       <blockquote className="rounded-md border border-border bg-[#0e1013] px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground/80">
                         “{s.excerpt}”
                       </blockquote>
-                      <a
-                        href={s.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-1.5 inline-flex items-center gap-1 text-xs text-accent transition-colors hover:text-accent-strong"
-                      >
-                        Open source <ExternalLink size={11} />
-                      </a>
+                      {sourceUrl && (
+                        <a
+                          href={sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-1.5 inline-flex items-center gap-1 text-xs text-accent transition-colors hover:text-accent-strong"
+                        >
+                          Open source <ExternalLink size={11} />
+                        </a>
+                      )}
                     </div>
                   )}
                 </div>
@@ -284,7 +293,10 @@ export function DiagnosisResult({
       </section>
 
       <RagTransparency rag={diagnosis.rag} />
-      <FollowUpChat sessionId={diagnosis.sessionId ?? "current"} />
+      <FollowUpChat
+        sessionId={diagnosis.sessionId ?? "current"}
+        confidence={diagnosis.confidence}
+      />
     </div>
   );
 }

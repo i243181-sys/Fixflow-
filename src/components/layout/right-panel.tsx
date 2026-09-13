@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import type { Diagnosis, SourceType } from "@/lib/types";
 import { SOURCE_TYPE_LABEL } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, safeExternalUrl } from "@/lib/utils";
 
 const TYPE_ICON: Record<SourceType, React.ReactNode> = {
   docs: <BookOpen size={13} />,
@@ -21,20 +21,16 @@ const TYPE_ICON: Record<SourceType, React.ReactNode> = {
   community: <MessageSquare size={13} />,
   code: <Code2 size={13} />,
 };
-export function SourceRow({
+function SourceRow({
   source,
   compact = false,
 }: {
   source: Diagnosis["sources"][number];
   compact?: boolean;
 }) {
-  return (
-    <a
-      href={source.url}
-      target="_blank"
-      rel="noreferrer"
-      className="group block rounded-md border border-transparent px-2.5 py-2 transition-colors hover:border-border hover:bg-white/[0.03]"
-    >
+  const sourceUrl = safeExternalUrl(source.url);
+  const content = (
+    <>
       <div className="flex items-center gap-1.5 text-[11px] text-muted">
         <span
           className={cn(
@@ -56,7 +52,15 @@ export function SourceRow({
           {source.excerpt}
         </p>
       )}
+    </>
+  );
+  const className = "group block rounded-md border border-transparent px-2.5 py-2 transition-colors hover:border-border hover:bg-white/[0.03]";
+  return sourceUrl ? (
+    <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className={className}>
+      {content}
     </a>
+  ) : (
+    <div className={className}>{content}</div>
   );
 }
 export function RightPanel({
@@ -128,8 +132,8 @@ export function RightPanel({
               label="Error class"
               value={diagnosis?.detected.includes("asyncio") ? "RuntimeError / asyncio" : "—"}
             />
-            <MetaBlock label="Environment" value="Linux x86_64 · Python 3.12 · uvicorn 0.34" />
-            <MetaBlock label="Session" value="local-dev · autosaved" />
+            <MetaBlock label="Environment" value="Not reported by backend" />
+            <MetaBlock label="Session" value="Current workspace session" />
             {diagnosis && (
               <>
                 <MetaBlock label="Confidence" value={`${diagnosis.confidence}%`} />

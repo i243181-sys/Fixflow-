@@ -9,8 +9,8 @@ import { useToast } from "@/components/ui/toast";
 import {
   addKnowledgeSource,
   listKnowledgeSources,
-  type KnowledgeSource,
 } from "@/lib/api";
+import type { KnowledgeSource } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type SourceMode = "docs" | "github" | "upload";
@@ -48,6 +48,12 @@ const STATUS_TONE: Record<KnowledgeSource["status"], "success" | "warning" | "da
   error: "danger",
 };
 
+function sourceName(mode: SourceMode, title: string, value: string): string {
+  if (mode === "github") return value.trim();
+  if (title) return title;
+  return mode === "docs" ? "Pasted documentation" : "Pasted document";
+}
+
 export default function SourcesPage() {
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [mode, setMode] = useState<SourceMode>("docs");
@@ -59,9 +65,15 @@ export default function SourcesPage() {
   const { toast } = useToast();
 
   useEffect(() => {
-    listKnowledgeSources().then(setSources).catch(() => {
-      toast("Could not load knowledge sources.", "error");
-    });
+    const controller = new AbortController();
+    void listKnowledgeSources(controller.signal)
+      .then(setSources)
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          toast("Could not load knowledge sources.", "error");
+        }
+      });
+    return () => controller.abort();
   }, [toast]);
 
   const resetForm = () => {
@@ -69,6 +81,11 @@ export default function SourcesPage() {
     setValue("");
     setSelectedFile(null);
     if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const selectMode = (nextMode: SourceMode) => {
+    setMode(nextMode);
+    resetForm();
   };
 
   const submitSource = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -79,10 +96,10 @@ export default function SourcesPage() {
     try {
       const source = await addKnowledgeSource({
         kind: mode,
-        value: mode === "docs" ? title || "Pasted documentation" : value.trim(),
+        value: sourceName(mode, title, value),
         fileName: mode === "upload" ? title || value.trim() : undefined,
-        content: mode === "docs" ? value : undefined,
-        file: selectedFile ?? undefined,
+        content: mode === "docs" || (mode === "upload" && !selectedFile) ? value : undefined,
+        file: mode === "upload" ? selectedFile ?? undefined : undefined,
       });
       setSources((current) => [source, ...current]);
       resetForm();
@@ -141,10 +158,7 @@ export default function SourcesPage() {
                     type="button"
                     role="tab"
                     aria-selected={mode === item.id}
-                    onClick={() => {
-                      setMode(item.id);
-                      setValue("");
-                    }}
+                    onClick={() => selectMode(item.id)}
                     className={cn(
                       "flex items-start gap-2 rounded-md border px-3 py-2.5 text-left transition-colors",
                       mode === item.id
@@ -169,6 +183,7 @@ export default function SourcesPage() {
                   {mode === "docs" ? (
                     <input
                       value={title}
+                      maxLength={255}
                       onChange={(event) => setTitle(event.target.value)}
                       placeholder="e.g. Internal debugging runbook"
                       className="mt-1.5 h-10 w-full rounded-md border border-border bg-[#0e1013] px-3 text-sm text-foreground placeholder:text-muted/50 focus:border-accent/60 focus:outline-none"
@@ -205,6 +220,7 @@ export default function SourcesPage() {
                     onChange={(event) => setValue(event.target.value)}
                     placeholder="https://docs.example.com or https://github.com/org/repo"
                     type="url"
+                    maxLength={2048}
                     className="mt-1.5 h-10 w-full rounded-md border border-border bg-[#0e1013] px-3 text-sm text-foreground placeholder:text-muted/50 focus:border-accent/60 focus:outline-none"
                     required
                   />

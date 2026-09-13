@@ -6,7 +6,7 @@ export interface SourceDoc {
   title: string;
   publisher: string;
   url: string;
-  relevance: number; // 0-100
+  relevance: number;
   excerpt: string;
   used: boolean;
 }
@@ -71,7 +71,8 @@ export interface DebugSession {
   errorMessage: string;
 }
 
-export interface KnowledgeIndex {
+export interface KnowledgeSource {
+  id: string;
   name: string;
   kind: "docs" | "github" | "community" | "upload";
   status: "indexed" | "indexing" | "queued" | "error";
@@ -79,6 +80,8 @@ export interface KnowledgeIndex {
   updated: string;
   detail: string;
 }
+
+export type MockKnowledgeSource = Omit<KnowledgeSource, "id">;
 
 export interface SavedSolution {
   id: string;

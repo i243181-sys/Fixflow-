@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BookOpen, Bot, CornerDownLeft, GitBranch, MessagesSquare, Code2, User } from "lucide-react";
 import { FOLLOWUP_SUGGESTIONS } from "@/lib/mock-data";
 import { sendFollowUp } from "@/lib/api";
@@ -15,23 +15,33 @@ const SOURCE_ICON: Record<SourceType, React.ReactNode> = {
   code: <Code2 size={11} />,
 };
 
-export function FollowUpChat({ sessionId }: { sessionId: string }) {
+export function FollowUpChat({
+  sessionId,
+  confidence,
+}: {
+  sessionId: string;
+  confidence: number;
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "seed",
       role: "fixflow",
-      text: "Diagnosis ready with 92% confidence. Ask me anything about this fix — the retrieved debugging context stays loaded for follow-ups.",
+      text: `Diagnosis ready with ${confidence}% confidence. Ask me anything about this fix — the retrieved debugging context stays loaded for follow-ups.`,
     },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const messageId = useRef(0);
+  const activeRequest = useRef<AbortController | null>(null);
   const { toast } = useToast();
   const listRef = useRef<HTMLDivElement>(null);
 
   const ask = async (q: string) => {
     const question = q.trim();
     if (!question || busy) return;
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
     setInput("");
     setBusy(true);
     const pendingId = `p-${messageId.current++}`;
@@ -41,7 +51,8 @@ export function FollowUpChat({ sessionId }: { sessionId: string }) {
       { id: pendingId, role: "fixflow", text: "", pending: true },
     ]);
     try {
-      const reply = await sendFollowUp(question, sessionId);
+      const reply = await sendFollowUp(question, sessionId, controller.signal);
+      if (controller.signal.aborted) return;
       setMessages((m) =>
         m.map((msg) =>
           msg.id === pendingId
@@ -50,15 +61,22 @@ export function FollowUpChat({ sessionId }: { sessionId: string }) {
         )
       );
     } catch {
-      setMessages((m) => m.filter((x) => x.id !== pendingId));
-      toast("Could not send the follow-up. Try again.", "error");
+      if (!controller.signal.aborted) {
+        setMessages((m) => m.filter((x) => x.id !== pendingId));
+        toast("Could not send the follow-up. Try again.", "error");
+      }
     } finally {
-      setBusy(false);
-      requestAnimationFrame(() =>
-        listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" })
-      );
+      if (activeRequest.current === controller) {
+        activeRequest.current = null;
+        setBusy(false);
+        requestAnimationFrame(() =>
+          listRef.current?.scrollTo?.({ top: listRef.current.scrollHeight, behavior: "smooth" })
+        );
+      }
     }
   };
+
+  useEffect(() => () => activeRequest.current?.abort(), []);
 
   return (
     <section aria-label="Follow-up chat" className="rounded-xl border border-border bg-panel">
@@ -104,9 +122,9 @@ export function FollowUpChat({ sessionId }: { sessionId: string }) {
                 </div>
                 {m.sources && m.sources.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
-                    {m.sources.map((s, i) => (
+                    {m.sources.map((s) => (
                       <span
-                        key={i}
+                        key={`${s.type}:${s.title}`}
                         className={cn(
                           "inline-flex items-center gap-1 rounded border border-border bg-panel-2 px-2 py-0.5 text-[10px]",
                           s.type === "docs" ? "text-lime/90" : "text-muted"
