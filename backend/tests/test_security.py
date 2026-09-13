@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -28,6 +29,17 @@ def test_python_executable_rejects_control_characters(monkeypatch: pytest.Monkey
     monkeypatch.setenv("FIXFLOW_PYTHON", "python3\nmalicious")
     with pytest.raises(ValueError):
         python_executable()
+
+
+def test_python_executable_preserves_virtual_environment_symlink(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "venv-python"
+    executable.symlink_to(sys.executable)
+    monkeypatch.setenv("FIXFLOW_PYTHON", str(executable))
+
+    assert python_executable() == str(executable)
 
 
 def test_source_hash_reservation_is_atomic() -> None:

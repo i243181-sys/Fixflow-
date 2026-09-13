@@ -71,9 +71,9 @@ def python_executable() -> str:
     if not configured or any(character in configured for character in ("\0", "\r", "\n")):
         raise ValueError("FIXFLOW_PYTHON is invalid")
     if Path(configured).name != configured:
-        executable = Path(configured).expanduser().resolve(strict=True)
-        if not executable.is_file():
-            raise ValueError("FIXFLOW_PYTHON does not identify a file")
+        executable = Path(configured).expanduser().absolute()
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            raise ValueError("FIXFLOW_PYTHON does not identify an executable file")
         return str(executable)
     resolved = shutil.which(configured)
     if resolved is None:
