@@ -17,6 +17,7 @@ import {
   X,
   BookmarkPlus,
   CircleAlert,
+  type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,6 +52,30 @@ const SOURCE_FILTERS: { id: SourceType | "all"; label: string }[] = [
   { id: "code", label: "Code" },
 ];
 
+const DIAGNOSIS_STATUS: Record<
+  Diagnosis["status"],
+  { label: string; icon: LucideIcon; border: string; iconStyle: string }
+> = {
+  "likely-cause-found": {
+    label: "Likely Cause Found",
+    icon: Check,
+    border: "border-success/25",
+    iconStyle: "bg-success/12 text-success",
+  },
+  investigating: {
+    label: "Investigation in Progress",
+    icon: Search,
+    border: "border-warning/25",
+    iconStyle: "bg-warning/12 text-warning",
+  },
+  "no-cause": {
+    label: "No Cause Identified",
+    icon: CircleAlert,
+    border: "border-danger/25",
+    iconStyle: "bg-danger/12 text-danger",
+  },
+};
+
 function relevanceTone(relevance: number): string {
   if (relevance >= 90) return "bg-lime";
   if (relevance >= 80) return "bg-accent";
@@ -67,6 +92,8 @@ export function DiagnosisResult({
   const [sourceFilter, setSourceFilter] = useState<SourceType | "all">("all");
   const [expanded, setExpanded] = useState<string[]>([diagnosis.sources[0]?.id ?? ""]);
   const { toast } = useToast();
+  const status = DIAGNOSIS_STATUS[diagnosis.status];
+  const StatusIcon = status.icon;
 
   const visible = useMemo(
     () =>
@@ -90,14 +117,22 @@ export function DiagnosisResult({
 
   return (
     <div className="space-y-4">
-      <section aria-label="Diagnosis summary" className="ff-fade-up rounded-xl border border-success/25 bg-panel p-4 sm:p-5">
+      <section
+        aria-label="Diagnosis summary"
+        className={cn("ff-fade-up rounded-xl border bg-panel p-4 sm:p-5", status.border)}
+      >
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-success/12 text-success">
-              <Check size={18} strokeWidth={2.5} />
+            <span
+              className={cn(
+                "flex h-9 w-9 items-center justify-center rounded-full",
+                status.iconStyle
+              )}
+            >
+              <StatusIcon size={18} strokeWidth={2.5} />
             </span>
             <div>
-              <p className="text-sm font-semibold">Likely Cause Found</p>
+              <p className="text-sm font-semibold">{status.label}</p>
               <p className="text-[11px] text-muted">Grounded in {diagnosis.rag.sourcesUsed} sources</p>
             </div>
           </div>
@@ -294,7 +329,7 @@ export function DiagnosisResult({
 
       <RagTransparency rag={diagnosis.rag} />
       <FollowUpChat
-        sessionId={diagnosis.sessionId ?? "current"}
+        sessionId={diagnosis.sessionId}
         confidence={diagnosis.confidence}
       />
     </div>

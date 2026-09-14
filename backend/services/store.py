@@ -37,11 +37,16 @@ def now() -> datetime:
 
 async def diagnose(db: AsyncSession, payload: DebugRequest) -> Diagnosis:
     session_id = str(uuid4())
-    error = payload.error or payload.context or ""
+    diagnostic_context = "\n".join(
+        value for value in (payload.error, payload.code, payload.context) if value
+    )
+    is_async_failure = any(
+        marker in diagnostic_context.casefold() for marker in ("asyncio", "event loop")
+    )
     techs = list(payload.techs)
     if payload.technology and payload.technology not in techs:
         techs.append(payload.technology)
-    if "asyncio" in error.lower() or "event loop" in error.lower():
+    if is_async_failure:
         root_cause = (
             "Async code is being called without a running event loop, commonly from synchronous or worker-thread code."
         )
@@ -61,8 +66,8 @@ async def diagnose(db: AsyncSession, payload: DebugRequest) -> Diagnosis:
 
     diagnosis = Diagnosis(
         sessionId=session_id,
-        status="likely-cause-found" if "asyncio" in error.lower() or "event loop" in error.lower() else "investigating",
-        confidence=92 if "asyncio" in error.lower() or "event loop" in error.lower() else 61,
+        status="likely-cause-found" if is_async_failure else "investigating",
+        confidence=92 if is_async_failure else 61,
         detected=techs,
         rootCause=root_cause,
         whyThisHappens=explanation,
@@ -86,7 +91,7 @@ async def diagnose(db: AsyncSession, payload: DebugRequest) -> Diagnosis:
         alternatives=[],
         sources=[],
         rag=RagDetails(
-            query=error,
+            query=diagnostic_context,
             expansions=[],
             retrieved=0,
             reranked=0,

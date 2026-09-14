@@ -1,6 +1,7 @@
 import type { Diagnosis } from "@/lib/types";
 
 export const ASYNCIO_DIAGNOSIS: Diagnosis = {
+  sessionId: "00000000-0000-4000-8000-000000000001",
   status: "likely-cause-found",
   confidence: 92,
   detected: ["Python", "FastAPI", "asyncio"],

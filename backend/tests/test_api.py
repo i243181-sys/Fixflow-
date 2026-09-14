@@ -108,10 +108,23 @@ async def test_debug_chat_and_saved_sessions_persist(client: httpx.AsyncClient) 
 
 async def test_invalid_requests_use_safe_errors(client: httpx.AsyncClient) -> None:
     assert (await client.post("/api/debug", json={})).status_code == 422
+    assert (await client.post("/api/debug", json={"context": "   "})).status_code == 422
     assert (await client.post("/api/chat", json={"session_id": "missing", "question": "hello"})).status_code == 404
     assert (await client.post("/api/chat", json={"session_id": "x", "question": " "})).status_code == 422
     assert (await client.get(f"/api/sources/{uuid4()}")).status_code == 404
     assert (await client.get("/api/sources/not-uuid")).status_code == 422
+
+
+async def test_debug_uses_code_as_diagnostic_context(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/debug",
+        json={"code": "asyncio.get_running_loop()  # RuntimeError: no running event loop"},
+    )
+
+    assert response.status_code == 200
+    diagnosis = response.json()
+    assert diagnosis["status"] == "likely-cause-found"
+    assert "event loop" in diagnosis["rag"]["query"]
 
 
 async def test_upload_validation(client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:

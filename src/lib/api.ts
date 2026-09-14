@@ -53,7 +53,6 @@ export interface DebugRequest {
   context?: string;
   repoUrl?: string;
   techs: string[];
-  files?: File[];
 }
 
 export function diagnose(req: DebugRequest, signal?: AbortSignal): Promise<Diagnosis> {
@@ -74,7 +73,7 @@ export function listSessions(signal?: AbortSignal): Promise<DebugSession[]> {
   return apiFetch("/api/sessions", { signal });
 }
 
-export function getSession(id: string, signal?: AbortSignal): Promise<Diagnosis | null> {
+export function getSession(id: string, signal?: AbortSignal): Promise<Diagnosis> {
   return apiFetch(`/api/sessions/${encodeURIComponent(id)}`, { signal });
 }
 

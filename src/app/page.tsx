@@ -9,7 +9,7 @@ import { PipelineProgress } from "@/components/debug/pipeline";
 import { DiagnosisResult } from "@/components/debug/diagnosis-result";
 import { useToast } from "@/components/ui/toast";
 import { diagnose, getSession, saveSolution as saveSolutionApi, type DebugRequest } from "@/lib/api";
-import type { Diagnosis, TechOption } from "@/lib/types";
+import type { Diagnosis } from "@/lib/types";
 
 function DebugSessionContent() {
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
@@ -17,7 +17,7 @@ function DebugSessionContent() {
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<string[]>([]);
-  const [techs, setTechs] = useState<TechOption[]>([]);
+  const [techs, setTechs] = useState<string[]>([]);
   const [repoUrl, setRepoUrl] = useState("");
   const [rightOpen, setRightOpen] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
@@ -32,13 +32,9 @@ function DebugSessionContent() {
       const controller = new AbortController();
       void getSession(sid, controller.signal)
         .then((session) => {
-          if (session) {
-            setDiagnosis(session);
-            setTechs((session.detected as TechOption[]) ?? []);
-            toast(`Reopened session "${sid}"`, "info");
-          } else {
-            setError("That debug session could not be found.");
-          }
+          setDiagnosis(session);
+          setTechs(session.detected);
+          toast(`Reopened session "${sid}"`, "info");
         })
         .catch(() => {
           if (!controller.signal.aborted) {

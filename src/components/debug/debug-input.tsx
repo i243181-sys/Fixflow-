@@ -90,7 +90,6 @@ export function DebugInput({
       context: context || undefined,
       repoUrl: repoUrl || undefined,
       techs,
-      files,
     });
   };
 

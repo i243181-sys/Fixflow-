@@ -31,7 +31,7 @@ export interface AlternativeFix {
 }
 
 export interface Diagnosis {
-  sessionId?: string;
+  sessionId: string;
   status: "likely-cause-found" | "investigating" | "no-cause";
   confidence: number;
   detected: string[];

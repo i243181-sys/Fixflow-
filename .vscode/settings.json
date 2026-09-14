@@ -1,4 +1,8 @@
 {
   "css.lint.unknownAtRules": "ignore",
-  "scss.lint.unknownAtRules": "ignore"
+  "scss.lint.unknownAtRules": "ignore",
+  "sonarlint.connectedMode.project": {
+    "connectionId": "i243181-sys",
+    "projectKey": "i243181-sys_Fixflow-"
+  }
 }

@@ -132,6 +132,18 @@ describe("debug interactions", () => {
     expect(screen.queryByRole("button", { name: "Apply Patch" })).toBeNull();
   });
 
+  it("shows the diagnosis status returned by the backend", () => {
+    withToasts(
+      <DiagnosisResult
+        diagnosis={{ ...ASYNCIO_DIAGNOSIS, status: "investigating" }}
+        onSaved={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Investigation in Progress")).toBeDefined();
+    expect(screen.queryByText("Likely Cause Found")).toBeNull();
+  });
+
   it("captures code, context, files, and selected technologies", () => {
     const onDiagnose = vi.fn();
     const onFilesChange = vi.fn();

@@ -21,7 +21,7 @@ function connectionDetails(online: boolean | null) {
   if (online) {
     return { label: "Connected to retrieval backend", text: "Connected" };
   }
-  return { label: "Offline — mock mode", text: "Offline" };
+  return { label: "Retrieval backend unavailable", text: "Offline" };
 }
 
 export function TopBar({

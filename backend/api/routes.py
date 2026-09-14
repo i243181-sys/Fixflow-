@@ -32,7 +32,7 @@ Database = Annotated[AsyncSession, Depends(get_session)]
 
 @router.post("/debug", response_model=Diagnosis)
 async def debug(payload: DebugRequest, db: Database) -> Diagnosis:
-    if not any((payload.error, payload.code, payload.context)):
+    if not any(value and value.strip() for value in (payload.error, payload.code, payload.context)):
         raise HTTPException(422, "Provide an error, code, or context")
     return await store.diagnose(db, payload)
 
