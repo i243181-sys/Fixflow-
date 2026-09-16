@@ -1,5 +1,19 @@
 export type SourceType = "docs" | "github" | "community" | "code";
 
+export interface DebugAttachment {
+  name: string;
+  content: string;
+}
+
+export interface DebugRequest {
+  error?: string;
+  code?: string;
+  context?: string;
+  repoUrl?: string;
+  techs: string[];
+  files?: DebugAttachment[];
+}
+
 export interface SourceDoc {
   id: string;
   type: SourceType;
@@ -33,14 +47,23 @@ export interface AlternativeFix {
 export interface Diagnosis {
   sessionId: string;
   status: "likely-cause-found" | "investigating" | "no-cause";
-  confidence: number;
+  confidence: number | null;
   detected: string[];
   rootCause: string;
   whyThisHappens: string;
   recommendedFix: FixStep[];
-  codeFix: CodeFix;
+  codeFix: CodeFix | null;
   alternatives: AlternativeFix[];
   sources: SourceDoc[];
+  generation?: "disabled" | "model" | "legacy";
+  request?: {
+    error?: string | null;
+    code?: string | null;
+    context?: string | null;
+    repo_url?: string | null;
+    techs: string[];
+    files?: DebugAttachment[];
+  } | null;
   rag: {
     query: string;
     expansions: string[];

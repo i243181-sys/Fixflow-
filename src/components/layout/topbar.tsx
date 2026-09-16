@@ -44,12 +44,14 @@ export function TopBar({
 
   useEffect(() => {
     const controller = new AbortController();
-    void checkBackendHealth(controller.signal)
-      .then(() => setOnline(true))
-      .catch(() => {
-        if (!controller.signal.aborted) setOnline(false);
-      });
-    return () => controller.abort();
+    const check = () => {
+      void checkBackendHealth(controller.signal)
+        .then((health) => { if (!controller.signal.aborted) setOnline(health.status === "ok"); })
+        .catch(() => { if (!controller.signal.aborted) setOnline(false); });
+    };
+    check();
+    const interval = window.setInterval(check, 30_000);
+    return () => { controller.abort(); window.clearInterval(interval); };
   }, []);
 
   const connection = connectionDetails(online);
@@ -102,7 +104,7 @@ export function TopBar({
               onClick={onToggleRightPanel}
               aria-label="Toggle context panel"
               aria-pressed={rightPanelOpen}
-              className="rounded-md p-1.5 text-muted transition-colors hover:bg-white/5 hover:text-foreground"
+              className="rounded-md p-1.5 text-muted transition-colors hover:bg-foreground/5 hover:text-foreground"
             >
               <PanelRight size={17} className={rightPanelOpen ? "text-accent" : ""} />
             </button>
@@ -114,7 +116,7 @@ export function TopBar({
             <SignInButton mode="modal">
               <button
                 type="button"
-                className="rounded-md px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-white/5 hover:text-foreground"
+                className="rounded-md px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-foreground/5 hover:text-foreground"
               >
                 Sign in
               </button>
@@ -122,7 +124,7 @@ export function TopBar({
             <SignUpButton mode="modal">
               <button
                 type="button"
-                className="rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-[#1a0e08] transition-colors hover:bg-accent-strong"
+                className="rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-accent-foreground transition-colors hover:bg-accent-strong"
               >
                 Sign up
               </button>
@@ -137,7 +139,7 @@ export function TopBar({
           <button
             onClick={toggle}
             aria-label="Toggle theme"
-            className="rounded-md p-1.5 text-muted transition-colors hover:bg-white/5 hover:text-foreground"
+            className="rounded-md p-1.5 text-muted transition-colors hover:bg-foreground/5 hover:text-foreground"
           >
             {dark ? <Moon size={16} /> : <Sun size={16} />}
           </button>

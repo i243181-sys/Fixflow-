@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   CircleAlert,
@@ -21,44 +20,25 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/components/layout/theme-provider";
 import { checkBackendHealth, listKnowledgeSources } from "@/lib/api";
-import type { KnowledgeSource } from "@/lib/types";
+import { useResource } from "@/lib/use-resource";
 import { SOURCE_STATUS } from "@/lib/sources";
 
 const BACKEND_TONE = {
   checking: "warning",
   online: "success",
   offline: "danger",
+  degraded: "warning",
 } as const;
 
 export default function SettingsPage() {
   const { dark, toggle } = useTheme();
-  const [backend, setBackend] = useState<"checking" | "online" | "offline">("checking");
-  const [sources, setSources] = useState<KnowledgeSource[]>([]);
-
-  const checkConnection = (signal?: AbortSignal) => {
-    setBackend("checking");
-    void checkBackendHealth(signal)
-      .then(() => setBackend("online"))
-      .catch(() => {
-        if (!signal?.aborted) setBackend("offline");
-      });
-  };
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const initialize = window.setTimeout(() => {
-      checkConnection(controller.signal);
-      void listKnowledgeSources(controller.signal)
-        .then(setSources)
-        .catch(() => {
-          if (!controller.signal.aborted) setSources([]);
-        });
-    }, 0);
-    return () => {
-      controller.abort();
-      window.clearTimeout(initialize);
-    };
-  }, []);
+  const health = useResource(checkBackendHealth);
+  const knowledge = useResource(listKnowledgeSources);
+  const sources = knowledge.data ?? [];
+  let backend: keyof typeof BACKEND_TONE = "degraded";
+  if (health.loading) backend = "checking";
+  else if (health.error) backend = "offline";
+  else if (health.data?.status === "ok") backend = "online";
 
   return (
     <AppShell sessionTitle="Settings">
@@ -100,7 +80,7 @@ export default function SettingsPage() {
           </div>
           <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3">
             <p className="font-mono text-[11px] text-muted">{process.env.NEXT_PUBLIC_API_URL || "Backend URL not configured"}</p>
-            <Button variant="outline" size="sm" onClick={() => checkConnection()} loading={backend === "checking"}>
+            <Button variant="outline" size="sm" onClick={() => { health.reload(); knowledge.reload(); }} loading={health.loading}>
               Check connection
             </Button>
           </div>
@@ -113,6 +93,17 @@ export default function SettingsPage() {
             <p className="mt-3 flex items-center gap-1.5 text-xs text-success">
               <CheckCircle2 size={13} /> FastAPI is reachable.
             </p>
+          )}
+          {backend === "degraded" && <p role="alert" className="mt-3 text-xs text-warning">The API is reachable, but database readiness checks failed.</p>}
+          {health.data && (
+            <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-3 text-xs">
+              <dt className="text-muted">Database / pgvector</dt><dd>{health.data.database} / {health.data.pgvector}</dd>
+              <dt className="text-muted">Schema</dt><dd>{health.data.schema} (revision {health.data.revision ?? "unknown"})</dd>
+              <dt className="text-muted">Documents / chunks</dt><dd>{health.data.documents ?? "—"} / {health.data.chunks ?? "—"}</dd>
+              <dt className="text-muted">Embedded chunks</dt><dd>{health.data.embedded_chunks ?? "—"}</dd>
+              <dt className="text-muted">Embedding configuration</dt><dd>{health.data.embedding_configured ? "Configured" : "Not configured"}</dd>
+              <dt className="text-muted">AI generation</dt><dd>{health.data.ai_generation === "configured" ? "Configured" : "Not connected"}</dd>
+            </dl>
           )}
         </section>
 
@@ -135,7 +126,9 @@ export default function SettingsPage() {
                 <Badge tone={SOURCE_STATUS[source.status].tone}>{SOURCE_STATUS[source.status].label}</Badge>
               </div>
             ))}
-            {!sources.length && <p className="text-xs text-muted">No source status available.</p>}
+            {knowledge.loading && <p role="status" className="text-xs text-muted">Loading source status…</p>}
+            {knowledge.error && <p role="alert" className="text-xs text-danger">{knowledge.error}</p>}
+            {!knowledge.loading && !knowledge.error && !sources.length && <p className="text-xs text-muted">No documents yet. Upload documentation in Knowledge Sources to enable retrieval.</p>}
           </div>
         </section>
 
@@ -143,7 +136,7 @@ export default function SettingsPage() {
           <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">
               <h2 className="text-sm font-semibold">Account</h2>
-              <p className="mt-1 text-xs text-muted">Manage your Clerk authentication.</p>
+              <p className="mt-1 text-xs text-muted">Manage your Clerk sign-in. This development workspace does not yet isolate backend data by user.</p>
             </div>
             <Show when="signed-in">
               <UserButton />

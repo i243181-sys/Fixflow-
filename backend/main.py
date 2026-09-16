@@ -11,14 +11,14 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.api.routes import router
 from backend.config import get_settings
-from backend.db.session import close_database, get_engine
+from backend.db.session import close_database
 from backend.services.ingestion import ingestion_worker
+from backend.services.readiness import database_readiness
 
 logger = logging.getLogger(__name__)
 
@@ -109,28 +109,10 @@ async def database_error(_: Request, __: SQLAlchemyError | PostgresError) -> JSO
 
 @app.get("/health")
 async def health() -> JSONResponse:
-    database = "unavailable"
-    vector = "unavailable"
-    try:
-        async with get_engine().connect() as connection:
-            await connection.execute(text("SELECT 1"))
-            database = "connected"
-            enabled = await connection.scalar(
-                text("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')")
-            )
-            vector = "available" if enabled else "unavailable"
-    except (SQLAlchemyError, PostgresError, OSError, ValueError, TimeoutError):
-        pass
-    healthy = database == "connected" and vector == "available"
+    result = await database_readiness()
     return JSONResponse(
-        status_code=200 if healthy else 503,
-        content={
-            "status": "ok" if healthy else "degraded",
-            "service": "fixflow-api",
-            "api": "ok",
-            "database": database,
-            "pgvector": vector,
-        },
+        status_code=200 if result["status"] == "ok" else 503,
+        content=result,
     )
 
 

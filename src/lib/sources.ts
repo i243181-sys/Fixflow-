@@ -15,3 +15,9 @@ export const SOURCE_STATUS: Record<KnowledgeSource["status"], {
 export function isSourcePending(source: KnowledgeSource): boolean {
   return ["uploaded", "processing", "chunked"].includes(source.status);
 }
+
+/** Keep newer upload results while including records from an earlier list request. */
+export function mergeSources(older: KnowledgeSource[], newer: KnowledgeSource[]): KnowledgeSource[] {
+  const recentIds = new Set(newer.map((source) => source.id));
+  return [...newer, ...older.filter((source) => !recentIds.has(source.id))];
+}

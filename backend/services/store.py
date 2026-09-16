@@ -1,157 +1,111 @@
-"""Persistent debug sessions and lexical retrieval (no embedding generation)."""
+"""Persist sessions and conversations independently of the diagnosis provider."""
 
-from __future__ import annotations
-
-import re
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.models import ChatEntry, DebugSession, DocumentChunk, KnowledgeSource
+from backend.db.models import ChatEntry, DebugSession
 from backend.db.models import SavedSolution as SavedRecord
+from backend.repositories.retrieval import search_chunks
 from backend.schemas.models import (
     ChatMessage,
-    CodeFix,
     DebugRequest,
     Diagnosis,
-    FixStep,
     RagDetails,
     SavedSolution,
     SaveRequest,
     SessionSummary,
     SourceReference,
 )
-
-_SEARCH_TERM_PATTERN = re.compile(r"[a-zA-Z0-9_]{3,}")
+from backend.services.diagnosis import DiagnosisProvider, diagnostic_text
 
 
 class SessionNotFoundError(LookupError):
-    """Raised when a chat references an unknown debug session."""
+    """Raised when a request references an unknown debug session."""
 
 
 def now() -> datetime:
     return datetime.now(UTC)
 
 
-async def diagnose(db: AsyncSession, payload: DebugRequest) -> Diagnosis:
-    session_id = str(uuid4())
-    diagnostic_context = "\n".join(
-        value for value in (payload.error, payload.code, payload.context) if value
-    )
-    is_async_failure = any(
-        marker in diagnostic_context.casefold() for marker in ("asyncio", "event loop")
-    )
-    techs = list(payload.techs)
-    if payload.technology and payload.technology not in techs:
-        techs.append(payload.technology)
-    if is_async_failure:
-        root_cause = (
-            "Async code is being called without a running event loop, commonly from synchronous or worker-thread code."
-        )
-        explanation = (
-            "The request path should stay async and await the coroutine directly; "
-            "synchronous work should be isolated in an executor."
-        )
-    else:
-        root_cause = (
-            "The supplied failure needs a closer match in the project context "
-            "before a single root cause can be confirmed."
-        )
-        explanation = (
-            "The backend has accepted the diagnostic context and will use the indexed "
-            "documentation when the retriever is connected."
-        )
-
+async def diagnose(db: AsyncSession, payload: DebugRequest, provider: DiagnosisProvider) -> Diagnosis:
+    query = diagnostic_text(payload)
+    sources = await search_chunks(db, query)
+    draft = await provider.diagnose(payload, sources)
+    session_id = uuid4()
     diagnosis = Diagnosis(
-        sessionId=session_id,
-        status="likely-cause-found" if is_async_failure else "investigating",
-        confidence=92 if is_async_failure else 61,
-        detected=techs,
-        rootCause=root_cause,
-        whyThisHappens=explanation,
-        recommendedFix=[
-            FixStep(
-                title="Keep the endpoint async",
-                detail="Declare the route async and await asynchronous work directly.",
-            ),
-            FixStep(
-                title="Move blocking work off the loop",
-                detail="Use an executor for synchronous libraries instead of blocking the event loop.",
-            ),
-        ],
-        codeFix=CodeFix(
-            file="app/api/routes/tasks.py",
-            lines="L14-L31",
-            language="python",
-            before="def get_report():\n    loop.run_until_complete(build_report())",
-            after="async def get_report():\n    return await build_report()",
-        ),
-        alternatives=[],
-        sources=[],
+        **draft.model_dump(),
+        sessionId=str(session_id),
+        request=payload,
+        generation=provider.generation,
+        sources=sources,
         rag=RagDetails(
-            query=diagnostic_context,
+            query=query,
             expansions=[],
-            retrieved=0,
+            retrieved=len(sources),
             reranked=0,
-            sourcesUsed=0,
+            sourcesUsed=len({source.title for source in sources}),
             topChunks=[],
         ),
     )
-    db.add(DebugSession(id=UUID(session_id), diagnosis=diagnosis.model_dump(mode="json")))
+    db.add(DebugSession(id=session_id, diagnosis=diagnosis.model_dump(mode="json")))
     await db.commit()
     return diagnosis
 
 
-async def chat(db: AsyncSession, session_id: UUID, question: str) -> ChatMessage:
+async def messages(db: AsyncSession, session_id: UUID) -> list[ChatMessage]:
     if await db.get(DebugSession, session_id) is None:
         raise SessionNotFoundError("Session not found")
-    terms = sorted(set(_SEARCH_TERM_PATTERN.findall(question.lower())))[:100]
-    matches = []
-    if terms:
-        query = func.to_tsquery("simple", " | ".join(terms))
-        matches = list(
-            (
-                await db.execute(
-                    select(DocumentChunk.content, KnowledgeSource.name)
-                    .join(KnowledgeSource, KnowledgeSource.id == DocumentChunk.source_id)
-                    .where(DocumentChunk.search_text.op("@@")(query))
-                    .order_by(func.ts_rank(DocumentChunk.search_text, query).desc(), DocumentChunk.id)
-                    .limit(3)
-                )
-            ).all()
+    records = await db.scalars(
+        select(ChatEntry)
+        .where(ChatEntry.session_id == session_id)
+        .order_by(
+            ChatEntry.created_at,
+            case((ChatEntry.payload["role"].astext == "user", 0), else_=1),
+            ChatEntry.id,
         )
-    sources = []
-    if matches:
-        excerpts = [f"{name}: {' '.join(content.split())[:500]}" for content, name in matches]
-        text = "Retrieved from the loaded documentation:\n\n" + "\n\n".join(excerpts)
-        sources = [SourceReference(title=name, type="docs") for name in dict.fromkeys(name for _, name in matches)]
-    else:
-        text = (
-            "I could not find a close match in the loaded chunks. Try naming the error, library, or function involved."
-        )
-    reply = ChatMessage(id=str(uuid4()), role="fixflow", text=text, sources=sources)
+    )
+    return [ChatMessage.model_validate(record.payload) for record in records]
+
+
+async def chat(db: AsyncSession, session_id: UUID, question: str, provider: DiagnosisProvider) -> ChatMessage:
+    diagnosis = await get_session(db, session_id)
+    if diagnosis is None:
+        raise SessionNotFoundError("Session not found")
+    history = await messages(db, session_id)
+    evidence = await search_chunks(db, question, limit=3)
+    answer = await provider.reply(question, diagnosis, history, evidence)
+    references = {source.title: SourceReference(title=source.title, type=source.type) for source in evidence}
+    reply = ChatMessage(id=str(uuid4()), role="fixflow", text=answer, sources=list(references.values()))
     user = ChatMessage(id=str(uuid4()), role="user", text=question)
-    db.add_all([ChatEntry(session_id=session_id, payload=message.model_dump(mode="json")) for message in (user, reply)])
+    db.add_all(
+        [
+            ChatEntry(session_id=session_id, payload=message.model_dump(mode="json"), created_at=now())
+            for message in (user, reply)
+        ]
+    )
     await db.commit()
     return reply
 
 
 async def sessions(db: AsyncSession) -> list[SessionSummary]:
-    records = await db.scalars(select(DebugSession).order_by(DebugSession.created_at.desc()))
+    records = await db.scalars(select(DebugSession).order_by(DebugSession.created_at.desc(), DebugSession.id))
     result = []
     for record in records:
         diagnosis = Diagnosis.model_validate(record.diagnosis)
+        description = diagnostic_text(diagnosis.request) if diagnosis.request else diagnosis.rootCause
+        title = description.splitlines()[0][:100] if description else "Debug session"
         result.append(
             SessionSummary(
                 id=str(record.id),
-                title="FixFlow debug session",
+                title=title,
                 technology=diagnosis.detected,
                 createdAt=record.created_at,
-                status="resolved" if diagnosis.status == "likely-cause-found" else "in-progress",
+                status="unresolved" if diagnosis.status == "no-cause" else "in-progress",
                 confidence=diagnosis.confidence,
-                errorMessage=diagnosis.rootCause,
+                errorMessage=description[:500],
             )
         )
     return result
@@ -163,7 +117,7 @@ async def get_session(db: AsyncSession, session_id: UUID) -> Diagnosis | None:
 
 
 async def saved(db: AsyncSession) -> list[SavedSolution]:
-    records = await db.scalars(select(SavedRecord).order_by(SavedRecord.created_at.desc()))
+    records = await db.scalars(select(SavedRecord).order_by(SavedRecord.created_at.desc(), SavedRecord.id))
     return [SavedSolution.model_validate(record.payload) for record in records]
 
 

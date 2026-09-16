@@ -5,7 +5,7 @@ import { ChevronDown, Database, Filter, Sparkles } from "lucide-react";
 import type { Diagnosis } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export function RagTransparency({ rag }: { rag: Diagnosis["rag"] }) {
+export function RagTransparency({ rag, generation }: { rag: Diagnosis["rag"]; generation?: Diagnosis["generation"] }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -37,7 +37,7 @@ export function RagTransparency({ rag }: { rag: Diagnosis["rag"] }) {
             <div className="space-y-1">
               <FlowStep label="Query" mono value={rag.query} />
               <Arrow />
-              <FlowStep label="Query Expansion">
+              {rag.expansions.length > 0 && <FlowStep label="Query Expansion">
                 <ul className="space-y-1 font-mono text-[11px] text-muted">
                   {rag.expansions.map((e) => (
                     <li key={e} className="flex gap-1.5">
@@ -45,11 +45,11 @@ export function RagTransparency({ rag }: { rag: Diagnosis["rag"] }) {
                     </li>
                   ))}
                 </ul>
-              </FlowStep>
+              </FlowStep>}
               <Arrow />
-              <FlowStep label="Hybrid Retrieval" mono value={`dense (pgvector) + BM25 · ${rag.retrieved} chunks`} />
+              <FlowStep label="Keyword retrieval" mono value={`PostgreSQL full-text search · ${rag.retrieved} chunks`} />
               <Arrow />
-              <FlowStep label="Top Documents">
+              {rag.topChunks.length > 0 && <FlowStep label="Top Documents">
                 <ul className="space-y-1">
                   {rag.topChunks.map((c) => (
                     <li key={c.doc} className="flex items-center gap-2 text-[11px]">
@@ -59,11 +59,11 @@ export function RagTransparency({ rag }: { rag: Diagnosis["rag"] }) {
                     </li>
                   ))}
                 </ul>
-              </FlowStep>
+              </FlowStep>}
               <Arrow />
-              <FlowStep label="Reranking" mono value={`cross-encoder · ${rag.reranked} kept`} />
+              <FlowStep label="Reranking" value={rag.reranked ? `${rag.reranked} chunks reranked` : "Not applied"} />
               <Arrow />
-              <FlowStep label="LLM Generation" mono value={`${rag.sourcesUsed} sources cited in answer`} />
+              <FlowStep label="AI generation" value={generation === "model" ? "AI provider connected" : "Not connected"} />
             </div>
 
             <div className="grid grid-cols-3 gap-2 self-start lg:grid-cols-1">
@@ -112,7 +112,7 @@ function Arrow() {
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-md border border-border bg-[#0e1013] px-3 py-2.5 text-center lg:text-left">
+    <div className="rounded-md border border-border bg-background px-3 py-2.5 text-center lg:text-left">
       <p className="font-mono text-xl font-semibold text-lime">{value}</p>
       <p className="text-[10px] uppercase tracking-wider text-muted/80">{label}</p>
     </div>

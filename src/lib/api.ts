@@ -1,6 +1,8 @@
 import type {
-  ChatMessage, DebugSession, Diagnosis, KnowledgeSource, SavedSolution, SourceType,
+  ChatMessage, DebugRequest, DebugSession, Diagnosis, KnowledgeSource, SavedSolution, SourceType,
 } from "./types";
+
+export type { DebugRequest } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -10,13 +12,24 @@ export interface BackendHealth {
   api: string;
   database: string;
   pgvector: string;
+  schema: string;
+  revision: string | null;
+  expected_revision: string | null;
+  sources: number | null;
+  documents: number | null;
+  chunks: number | null;
+  embedded_chunks: number | null;
+  pending_sources: number | null;
+  failed_sources: number | null;
+  embedding_configured: boolean;
+  ai_generation: string;
 }
 
 export function checkBackendHealth(signal?: AbortSignal): Promise<BackendHealth> {
-  return apiFetch("/health", { signal });
+  return apiFetch("/health", { signal }, [503]);
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+async function apiFetch<T>(path: string, init?: RequestInit, acceptedStatuses: number[] = []): Promise<T> {
   if (!API_URL) throw new Error("NEXT_PUBLIC_API_URL is not configured");
   const headers = new Headers(init?.headers);
   if (init?.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
@@ -24,13 +37,19 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   }
   let response: Response;
   try {
-    response = await fetch(`${API_URL.replace(/\/$/, "")}${path}`, { ...init, headers });
+    const timeout = AbortSignal.timeout(60_000);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    response = await fetch(`${API_URL.replace(/\/$/, "")}${path}`, { ...init, headers, signal });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (init?.signal?.aborted) throw error;
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error("The backend took too long to respond. Please try again.");
+    }
     throw new Error("Could not connect to the FixFlow backend.", { cause: error });
   }
   const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
+  if (!response.ok && !acceptedStatuses.includes(response.status)) throw new Error(apiErrorMessage(body, response.status));
+  if (body === null) throw new Error("The backend returned an invalid response. Please try again.");
   return body as T;
 }
 
@@ -47,20 +66,12 @@ function apiErrorMessage(body: unknown, status: number): string {
   return `API request failed (${status})`;
 }
 
-export interface DebugRequest {
-  error?: string;
-  code?: string;
-  context?: string;
-  repoUrl?: string;
-  techs: string[];
-}
-
 export function diagnose(req: DebugRequest, signal?: AbortSignal): Promise<Diagnosis> {
   return apiFetch("/api/debug", {
     method: "POST", signal,
     body: JSON.stringify({
       error: req.error, code: req.code, context: req.context,
-      repo_url: req.repoUrl, techs: req.techs,
+      repo_url: req.repoUrl, techs: req.techs, files: req.files,
     }),
   });
 }
@@ -77,6 +88,10 @@ export function getSession(id: string, signal?: AbortSignal): Promise<Diagnosis>
   return apiFetch(`/api/sessions/${encodeURIComponent(id)}`, { signal });
 }
 
+export function listMessages(id: string, signal?: AbortSignal): Promise<ChatMessage[]> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(id)}/messages`, { signal });
+}
+
 export function listKnowledgeSources(signal?: AbortSignal): Promise<KnowledgeSource[]> {
   return apiFetch("/api/sources", { signal });
 }
@@ -90,13 +105,13 @@ export function addKnowledgeSource(input: {
   value: string;
   content?: string;
   file?: File;
-}): Promise<KnowledgeSource> {
+}, signal?: AbortSignal): Promise<KnowledgeSource> {
   const form = new FormData();
   form.set("kind", input.kind);
   form.set("value", input.value);
   if (input.content) form.set("content", input.content);
   if (input.file) form.set("file", input.file);
-  return apiFetch("/api/documents", { method: "POST", body: form });
+  return apiFetch("/api/documents", { method: "POST", body: form, signal });
 }
 
 export function listSaved(signal?: AbortSignal): Promise<SavedSolution[]> {

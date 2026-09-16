@@ -12,6 +12,18 @@ SourceStatus = Literal["uploaded", "processing", "chunked", "ready_for_embedding
 ShortText = Annotated[str, Field(max_length=200)]
 
 
+class DebugAttachment(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    content: str = Field(min_length=1, max_length=50_000)
+
+    @field_validator("name", "content")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        if not value.strip() or "\x00" in value:
+            raise ValueError("Attachments must contain nonblank text without null bytes")
+        return value
+
+
 class DebugRequest(BaseModel):
     error: str | None = Field(default=None, max_length=200_000)
     code: str | None = Field(default=None, max_length=500_000)
@@ -19,6 +31,14 @@ class DebugRequest(BaseModel):
     repo_url: str | None = Field(default=None, max_length=2_048)
     technology: ShortText | None = None
     techs: list[ShortText] = Field(default_factory=list, max_length=30)
+    files: list[DebugAttachment] = Field(default_factory=list, max_length=5)
+
+    @field_validator("error", "code", "context")
+    @classmethod
+    def reject_null_bytes(cls, value: str | None) -> str | None:
+        if value and "\x00" in value:
+            raise ValueError("Diagnostic text cannot contain null bytes")
+        return value
 
     @field_validator("repo_url")
     @classmethod
@@ -82,16 +102,23 @@ class SourceReference(BaseModel):
     type: SourceType
 
 
-class Diagnosis(BaseModel):
-    sessionId: str
+class DiagnosisDraft(BaseModel):
+    """Provider output, independent of storage and retrieval implementation."""
+
     status: Literal["likely-cause-found", "investigating", "no-cause"]
-    confidence: int = Field(ge=0, le=100)
+    confidence: int | None = Field(default=None, ge=0, le=100)
     detected: list[str]
     rootCause: str
     whyThisHappens: str
     recommendedFix: list[FixStep]
-    codeFix: CodeFix
+    codeFix: CodeFix | None = None
     alternatives: list[AlternativeFix]
+
+
+class Diagnosis(DiagnosisDraft):
+    sessionId: str
+    request: DebugRequest | None = None
+    generation: Literal["disabled", "model", "legacy"] = "legacy"
     sources: list[SourceDoc]
     rag: RagDetails
 
@@ -104,8 +131,8 @@ class ChatRequest(BaseModel):
     @classmethod
     def validate_question(cls, value: str) -> str:
         question = value.strip()
-        if not question:
-            raise ValueError("Question cannot be blank")
+        if not question or "\x00" in question:
+            raise ValueError("Question cannot be blank or contain null bytes")
         return question
 
 

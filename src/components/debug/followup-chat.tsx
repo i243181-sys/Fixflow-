@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BookOpen, Bot, CornerDownLeft, GitBranch, MessagesSquare, Code2, User } from "lucide-react";
 import { FOLLOWUP_SUGGESTIONS } from "@/lib/chat-suggestions";
-import { sendFollowUp } from "@/lib/api";
+import { listMessages, sendFollowUp } from "@/lib/api";
 import type { ChatMessage, SourceType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
@@ -15,39 +15,53 @@ const SOURCE_ICON: Record<SourceType, React.ReactNode> = {
   code: <Code2 size={11} />,
 };
 
-export function FollowUpChat({
+export function FollowUpChat(props: { sessionId: string; confidence: number | null }) {
+  return <SessionChat key={props.sessionId} {...props} />;
+}
+
+function SessionChat({
   sessionId,
   confidence,
 }: {
   sessionId: string;
-  confidence: number;
+  confidence: number | null;
 }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "seed",
-      role: "fixflow",
-      text: `Diagnosis ready with ${confidence}% confidence. Ask me anything about this fix — the retrieved debugging context stays loaded for follow-ups.`,
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const messageId = useRef(0);
   const activeRequest = useRef<AbortController | null>(null);
   const { toast } = useToast();
   const listRef = useRef<HTMLDivElement>(null);
+  const scrollFrame = useRef<number | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void listMessages(sessionId, controller.signal).then((items) => {
+      if (!controller.signal.aborted) setMessages(items);
+    }).catch(() => {
+      if (!controller.signal.aborted) setLoadError(true);
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
+    return () => controller.abort();
+  }, [sessionId, retry]);
 
   const ask = async (q: string) => {
     const question = q.trim();
-    if (!question || busy) return;
-    activeRequest.current?.abort();
+    if (!question || busy || loading || loadError || activeRequest.current) return;
     const controller = new AbortController();
     activeRequest.current = controller;
     setInput("");
     setBusy(true);
     const pendingId = `p-${messageId.current++}`;
+    const userId = `u-${messageId.current++}`;
     setMessages((m) => [
       ...m,
-      { id: `u-${messageId.current++}`, role: "user", text: question },
+      { id: userId, role: "user", text: question },
       { id: pendingId, role: "fixflow", text: "", pending: true },
     ]);
     try {
@@ -62,21 +76,25 @@ export function FollowUpChat({
       );
     } catch {
       if (!controller.signal.aborted) {
-        setMessages((m) => m.filter((x) => x.id !== pendingId));
+        setMessages((m) => m.filter((x) => x.id !== pendingId && x.id !== userId));
+        setInput(question);
         toast("Could not send the follow-up. Try again.", "error");
       }
     } finally {
       if (activeRequest.current === controller) {
         activeRequest.current = null;
         setBusy(false);
-        requestAnimationFrame(() =>
+        scrollFrame.current = requestAnimationFrame(() =>
           listRef.current?.scrollTo?.({ top: listRef.current.scrollHeight, behavior: "smooth" })
         );
       }
     }
   };
 
-  useEffect(() => () => activeRequest.current?.abort(), []);
+  useEffect(() => () => {
+    activeRequest.current?.abort();
+    if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+  }, []);
 
   return (
     <section aria-label="Follow-up chat" className="rounded-xl border border-border bg-panel">
@@ -84,11 +102,20 @@ export function FollowUpChat({
         <Bot size={15} className="text-accent" />
         <h3 className="text-sm font-semibold">Ask about this fix…</h3>
         <span className="ml-auto hidden text-[11px] text-muted sm:inline">
-          context from diagnosis attached
+          saved with this session
         </span>
       </div>
 
       <div ref={listRef} className="max-h-96 space-y-3 overflow-y-auto px-4 py-4">
+        {loading && <p role="status" className="text-sm text-muted">Loading conversation…</p>}
+        {loadError && <p role="alert" className="text-sm text-danger">
+          Could not load the conversation. <button className="underline" onClick={() => {
+            setLoading(true); setLoadError(false); setRetry((value) => value + 1);
+          }}>Retry</button>
+        </p>}
+        {!loading && !loadError && !messages.length && <p className="text-sm text-muted">
+          {confidence === null ? "Search your documentation with a follow-up question." : "Ask a follow-up about this result."}
+        </p>}
         {messages.map((m) =>
           m.role === "user" ? (
             <div key={m.id} className="ff-fade-up flex justify-end gap-2.5">
@@ -105,7 +132,7 @@ export function FollowUpChat({
                 <Bot size={13} />
               </span>
               <div className="max-w-[85%] space-y-2">
-                <div className="rounded-lg rounded-tl-sm border border-border bg-[#0e1013] px-3.5 py-2.5">
+                <div className="rounded-lg rounded-tl-sm border border-border bg-background px-3.5 py-2.5">
                   {m.pending ? (
                     <span className="flex gap-1 py-1" aria-label="FixFlow is thinking">
                       {[0, 1, 2].map((i) => (
@@ -117,7 +144,7 @@ export function FollowUpChat({
                       ))}
                     </span>
                   ) : (
-                    <p className="text-[13px] leading-relaxed text-foreground/90">{m.text}</p>
+                    <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">{m.text}</p>
                   )}
                 </div>
                 {m.sources && m.sources.length > 0 && (
@@ -148,7 +175,7 @@ export function FollowUpChat({
             <button
               key={s}
               onClick={() => ask(s)}
-              disabled={busy}
+              disabled={busy || loading || loadError}
               className="rounded-full border border-border px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
             >
               {s}
@@ -159,17 +186,18 @@ export function FollowUpChat({
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && ask(input)}
+            onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && void ask(input)}
             placeholder="Ask a follow-up about this diagnosis…"
             aria-label="Follow-up question"
-            disabled={busy}
-            className="h-10 flex-1 rounded-lg border border-border bg-[#0e1013] px-3.5 text-sm text-foreground placeholder:text-muted/50 focus:border-accent/60 focus:outline-none disabled:opacity-60"
+            disabled={busy || loading || loadError}
+            maxLength={4000}
+            className="h-10 flex-1 rounded-lg border border-border bg-background px-3.5 text-sm text-foreground placeholder:text-muted/50 focus:border-accent/60 focus:outline-none disabled:opacity-60"
           />
           <button
             onClick={() => ask(input)}
-            disabled={busy || !input.trim()}
+            disabled={busy || loading || loadError || !input.trim()}
             aria-label="Send follow-up"
-            className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-[#1a0e08] transition-colors hover:bg-accent-strong disabled:opacity-40"
+            className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent text-accent-foreground transition-colors hover:bg-accent-strong disabled:opacity-40"
           >
             <CornerDownLeft size={16} />
           </button>

@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "FixFlow — Software Debugging RAG",
   description:
-    "Grounded debugging using documentation, GitHub issues, community solutions and code examples.",
+    "Search uploaded documentation and preserve debugging context, sessions, and conversations.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

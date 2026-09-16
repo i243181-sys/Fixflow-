@@ -85,9 +85,13 @@ function relevanceTone(relevance: number): string {
 export function DiagnosisResult({
   diagnosis,
   onSaved,
+  saving = false,
+  saved = false,
 }: {
   diagnosis: Diagnosis;
   onSaved: () => void;
+  saving?: boolean;
+  saved?: boolean;
 }) {
   const [sourceFilter, setSourceFilter] = useState<SourceType | "all">("all");
   const [expanded, setExpanded] = useState<string[]>([diagnosis.sources[0]?.id ?? ""]);
@@ -133,11 +137,11 @@ export function DiagnosisResult({
             </span>
             <div>
               <p className="text-sm font-semibold">{status.label}</p>
-              <p className="text-[11px] text-muted">Grounded in {diagnosis.rag.sourcesUsed} sources</p>
+              <p className="text-[11px] text-muted">{diagnosis.rag.sourcesUsed} documentation sources retrieved</p>
             </div>
           </div>
           <div className="h-8 w-px bg-border max-sm:hidden" />
-          <div>
+          {diagnosis.confidence !== null && <div>
             <p className="text-[11px] uppercase tracking-wider text-muted/70">Confidence</p>
             <div className="flex items-center gap-2">
               <p className={cn("font-mono text-lg font-semibold", diagnosis.confidence >= 85 ? "text-success" : "text-warning")}>
@@ -150,7 +154,7 @@ export function DiagnosisResult({
                 />
               </div>
             </div>
-          </div>
+          </div>}
           <div className="h-8 w-px bg-border max-sm:hidden" />
           <div>
             <p className="text-[11px] uppercase tracking-wider text-muted/70">Detected</p>
@@ -163,8 +167,8 @@ export function DiagnosisResult({
             </div>
           </div>
           <div className="ml-auto flex gap-2">
-            <Button variant="outline" size="sm" onClick={onSaved}>
-              <BookmarkPlus size={14} /> Save
+            <Button variant="outline" size="sm" onClick={onSaved} loading={saving} disabled={saved}>
+              <BookmarkPlus size={14} /> {saved ? "Saved" : "Save"}
             </Button>
             <Button variant="secondary" size="sm" onClick={exportDiagnosis}>
               Export
@@ -172,6 +176,9 @@ export function DiagnosisResult({
           </div>
         </div>
       </section>
+      {diagnosis.generation === "disabled" && <p role="status" className="rounded-lg border border-border bg-panel p-3 text-sm text-muted">
+        Documentation search is available. AI diagnosis and suggested code changes are not connected yet.
+      </p>}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <ResultCard icon={<Target size={15} className="text-accent" />} title="Root Cause">
@@ -198,7 +205,7 @@ export function DiagnosisResult({
         </ol>
       </ResultCard>
 
-      <ResultCard icon={<GitBranch size={15} className="text-lime" />} title="Code Fix">
+      {diagnosis.codeFix && <ResultCard icon={<GitBranch size={15} className="text-lime" />} title="Code Fix">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="muted" className="font-mono">{diagnosis.codeFix.file}</Badge>
@@ -217,9 +224,9 @@ export function DiagnosisResult({
             <CodeBlock code={diagnosis.codeFix.after} language={diagnosis.codeFix.language} tone="success" label="After" />
           </div>
         </div>
-      </ResultCard>
+      </ResultCard>}
 
-      <section aria-label="Alternative fixes" className="rounded-xl border border-border bg-panel">
+      {diagnosis.alternatives.length > 0 && <section aria-label="Alternative fixes" className="rounded-xl border border-border bg-panel">
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
           <Scale size={15} className="text-warning" />
           <h3 className="text-sm font-semibold">Alternative Fixes</h3>
@@ -242,7 +249,7 @@ export function DiagnosisResult({
             </details>
           ))}
         </div>
-      </section>
+      </section>}
 
       <section aria-label="Evidence and sources" className="rounded-xl border border-border bg-panel">
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
@@ -290,10 +297,10 @@ export function DiagnosisResult({
                       </span>
                       <span className="mt-0.5 flex items-center gap-2">
                         <span className="text-[11px] text-muted/70">{SOURCE_TYPE_LABEL[s.type]}</span>
-                        {s.used && <Badge tone="lime">used in answer</Badge>}
+                        {s.used && <Badge tone="lime">{diagnosis.generation === "disabled" ? "keyword match" : "retrieved"}</Badge>}
                       </span>
                     </span>
-                    <span className="flex shrink-0 flex-col items-end gap-1">
+                    {diagnosis.generation !== "disabled" && <span className="flex shrink-0 flex-col items-end gap-1">
                       <span className="font-mono text-xs font-semibold text-foreground/80">{s.relevance}%</span>
                       <span className="h-1 w-16 overflow-hidden rounded-full bg-panel-2">
                         <span
@@ -301,11 +308,11 @@ export function DiagnosisResult({
                           style={{ width: `${s.relevance}%` }}
                         />
                       </span>
-                    </span>
+                    </span>}
                   </button>
                   {open && (
                     <div className="ff-fade-up pb-3.5 pl-[68px] pr-4">
-                      <blockquote className="rounded-md border border-border bg-[#0e1013] px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground/80">
+                      <blockquote className="rounded-md border border-border bg-background px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground/80">
                         “{s.excerpt}”
                       </blockquote>
                       {sourceUrl && (
@@ -327,7 +334,7 @@ export function DiagnosisResult({
         </div>
       </section>
 
-      <RagTransparency rag={diagnosis.rag} />
+      <RagTransparency rag={diagnosis.rag} generation={diagnosis.generation} />
       <FollowUpChat
         sessionId={diagnosis.sessionId}
         confidence={diagnosis.confidence}

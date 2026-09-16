@@ -93,6 +93,9 @@ async def test_partial_ingestion_rolls_back_then_retries(
     assert detail["document_count"] == detail["chunk_count"] == 0
     assert "sensitive" not in detail["error_message"]
     monkeypatch.setattr(ingestion, "load_documents", real_loader)
+    # A replacement upload must also recover a lost original file.
+    original = next(get_settings().upload_dir.glob("*/retry.md"))
+    original.unlink()
     retry = await client.post("/api/documents", files={"file": ("retry.md", b"Original document text")})
     assert retry.json()["source_id"] == str(source_id)
     assert retry.json()["status"] == "uploaded"
@@ -159,6 +162,10 @@ async def test_vectors_insert_search_validation_and_clear(db: AsyncSession, monk
     assert results[0].distance == pytest.approx(0)
     assert results[0].source_id == source_id
     assert (await list_sources(db))[0].status == "indexed"
+    monkeypatch.setattr(get_settings(), "embedding_model", "different-model")
+    with pytest.raises(EmbeddingPipelineNotConfigured):
+        await vectors.similarity_search([1, 0, 0])
+    monkeypatch.setattr(get_settings(), "embedding_model", "deterministic-db-test-only")
     await vectors.delete_source_vectors(source_id)
     await db.commit()
     assert await vectors.count_embedded_chunks(source_id) == 0

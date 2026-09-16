@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -24,27 +23,29 @@ from backend.schemas.models import (
     SessionSummary,
 )
 from backend.services import store
+from backend.services.diagnosis import DiagnosisProvider, diagnostic_text, get_diagnosis_provider
 from backend.services.uploads import discard_upload, safe_filename, save_upload, validated_remote_url
 
 router = APIRouter()
 Database = Annotated[AsyncSession, Depends(get_session)]
+Provider = Annotated[DiagnosisProvider, Depends(get_diagnosis_provider)]
 
 
 @router.post("/debug", response_model=Diagnosis)
-async def debug(payload: DebugRequest, db: Database) -> Diagnosis:
-    if not any(value and value.strip() for value in (payload.error, payload.code, payload.context)):
+async def debug(payload: DebugRequest, db: Database, provider: Provider) -> Diagnosis:
+    if not diagnostic_text(payload):
         raise HTTPException(422, "Provide an error, code, or context")
-    return await store.diagnose(db, payload)
+    return await store.diagnose(db, payload, provider)
 
 
 @router.post("/chat", response_model=ChatMessage)
-async def chat(payload: ChatRequest, db: Database) -> ChatMessage:
+async def chat(payload: ChatRequest, db: Database, provider: Provider) -> ChatMessage:
     try:
         session_id = UUID(payload.session_id)
     except ValueError as error:
         raise HTTPException(404, "Session not found") from error
     try:
-        return await store.chat(db, session_id, payload.question.strip())
+        return await store.chat(db, session_id, payload.question, provider)
     except store.SessionNotFoundError as error:
         raise HTTPException(404, str(error)) from error
 
@@ -65,6 +66,14 @@ async def session(session_id: UUID, db: Database) -> Diagnosis:
 @router.get("/sources", response_model=list[KnowledgeSource])
 async def sources(db: Database) -> list[KnowledgeSource]:
     return await list_sources(db)
+
+
+@router.get("/sessions/{session_id}/messages", response_model=list[ChatMessage])
+async def session_messages(session_id: UUID, db: Database) -> list[ChatMessage]:
+    try:
+        return await store.messages(db, session_id)
+    except store.SessionNotFoundError as error:
+        raise HTTPException(404, str(error)) from error
 
 
 @router.get("/sources/{source_id}", response_model=KnowledgeSource)
@@ -109,8 +118,12 @@ async def documents(
     else:
         if file is None and not content:
             raise HTTPException(400, "Provide document content or a file")
-        name = file.filename or "uploaded-document.md" if file else value or "pasted-document.md"
-        name = safe_filename(name if Path(name).suffix else f"{name}.md")
+        if file:
+            name = safe_filename(file.filename or "uploaded-document.md")
+        else:
+            # A document title may contain dots; it is not an uploaded filename.
+            title = (value.strip() or "pasted-document")[:240]
+            name = safe_filename(title if title.lower().endswith((".md", ".txt", ".rst")) else f"{title}.md")
         path, digest = await save_upload(name, file, content)
     try:
         result = await db.scalar(
@@ -129,14 +142,19 @@ async def documents(
             .returning(SourceRecord.id)
         )
         if result is None:
-            if path:
-                discard_upload(path)
-                path = None
-            record = (await db.scalars(select(SourceRecord).where(SourceRecord.file_hash == digest))).one()
+            record = (
+                await db.scalars(select(SourceRecord).where(SourceRecord.file_hash == digest).with_for_update())
+            ).one()
             result = record.id
-            if record.status == "failed" and record.path:
+            if record.status == "failed" and path:
+                # Retry from this upload, even when the previous file was lost.
+                record.path = str(path)
+                record.name = name
                 record.status = "uploaded"
                 record.error_message = None
+            elif path:
+                discard_upload(path)
+                path = None
         await db.commit()
     except BaseException:
         await db.rollback()

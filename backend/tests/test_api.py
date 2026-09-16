@@ -5,12 +5,14 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from backend.config import get_settings
 from backend.db.models import DocumentChunk
 from backend.db.session import close_database, get_session_factory
 from backend.main import app
+from backend.schemas.models import ChatMessage, DebugRequest, Diagnosis, DiagnosisDraft, SourceDoc
+from backend.services.diagnosis import DocumentationProvider, get_diagnosis_provider
 from backend.services.ingestion import ingest_source
 
 pytestmark = pytest.mark.anyio
@@ -19,13 +21,14 @@ pytestmark = pytest.mark.anyio
 async def test_health(client: httpx.AsyncClient) -> None:
     response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "ok",
-        "service": "fixflow-api",
-        "api": "ok",
-        "database": "connected",
-        "pgvector": "available",
-    }
+    health = response.json()
+    assert health["status"] == health["api"] == "ok"
+    assert health["database"] == "connected"
+    assert health["pgvector"] == "available"
+    assert health["schema"] == "ready"
+    assert health["revision"] == health["expected_revision"] == "0001"
+    assert health["sources"] == health["documents"] == health["chunks"] == health["embedded_chunks"] == 0
+    assert health["ai_generation"] == "not_configured"
 
 
 async def test_upload_ingestion_status_and_persistence(client: httpx.AsyncClient) -> None:
@@ -79,7 +82,9 @@ async def test_debug_chat_and_saved_sessions_persist(client: httpx.AsyncClient) 
     )
     await ingest_source(UUID(upload.json()["source_id"]))
     diagnosis = (await client.post("/api/debug", json={"error": "RuntimeError: no running event loop"})).json()
-    assert diagnosis["sources"] == []
+    assert diagnosis["sources"][0]["title"] == "asyncio.md"
+    assert diagnosis["generation"] == "disabled"
+    assert diagnosis["confidence"] is diagnosis["codeFix"] is None
     reply = await client.post(
         "/api/chat",
         json={
@@ -102,6 +107,9 @@ async def test_debug_chat_and_saved_sessions_persist(client: httpx.AsyncClient) 
     assert saved.status_code == 200
     await close_database()
     assert (await client.get(f"/api/sessions/{diagnosis['sessionId']}")).json() == diagnosis
+    messages = (await client.get(f"/api/sessions/{diagnosis['sessionId']}/messages")).json()
+    assert [message["role"] for message in messages] == ["user", "fixflow"]
+    assert messages[1] == reply.json()
     assert len((await client.get("/api/sessions")).json()) == 1
     assert (await client.get("/api/saved")).json() == [saved.json()]
 
@@ -123,7 +131,9 @@ async def test_debug_uses_code_as_diagnostic_context(client: httpx.AsyncClient) 
 
     assert response.status_code == 200
     diagnosis = response.json()
-    assert diagnosis["status"] == "likely-cause-found"
+    assert diagnosis["status"] == "no-cause"
+    assert diagnosis["generation"] == "disabled"
+    assert diagnosis["confidence"] is None
     assert "event loop" in diagnosis["rag"]["query"]
 
 
@@ -187,8 +197,109 @@ async def test_health_unavailable_has_no_secrets(client: httpx.AsyncClient, monk
     def unavailable() -> None:
         raise OSError("private-database-password")
 
-    monkeypatch.setattr("backend.main.get_engine", unavailable)
+    monkeypatch.setattr("backend.services.readiness.get_engine", unavailable)
     response = await client.get("/health")
     assert response.status_code == 503
     assert response.json()["database"] == "unavailable"
     assert "private" not in response.text
+
+
+async def test_attachment_only_diagnosis_persists_context(client: httpx.AsyncClient) -> None:
+    payload = {"files": [{"name": "worker.py", "content": "await worker.run()"}], "techs": ["Python"]}
+    response = await client.post("/api/debug", json=payload)
+    assert response.status_code == 200
+    diagnosis = response.json()
+    assert diagnosis["request"]["files"] == payload["files"]
+    assert diagnosis["rag"]["query"] == "await worker.run()"
+    assert diagnosis["codeFix"] is None
+    assert diagnosis["confidence"] is None
+    await close_database()
+    assert (await client.get(f"/api/sessions/{diagnosis['sessionId']}")).json() == diagnosis
+    assert (await client.get(f"/api/sessions/{diagnosis['sessionId']}/messages")).json() == []
+    assert (await client.get(f"/api/sessions/{uuid4()}/messages")).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"error": "bad\x00text"},
+        {"files": [{"name": "empty.txt", "content": "   "}]},
+        {"files": [{"name": "binary.txt", "content": "bad\x00text"}]},
+        {"files": [{"name": "large.txt", "content": "x" * 50_001}]},
+        {"files": [{"name": "one.txt", "content": "text"}] * 6},
+        {"repo_url": "https://user:password@example.com", "error": "failure"},
+    ],
+)
+async def test_invalid_debug_context(client: httpx.AsyncClient, payload: dict[str, object]) -> None:
+    assert (await client.post("/api/debug", json=payload)).status_code == 422
+
+
+async def test_titles_with_dots_and_readiness_counts(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/api/documents", data={"kind": "docs", "value": "Python 3.14", "content": "asyncio guide"}
+    )
+    assert response.status_code == 202
+    assert response.json()["name"] == "Python-3.14.md"
+    await ingest_source(UUID(response.json()["source_id"]))
+    health = (await client.get("/health")).json()
+    assert health["sources"] == health["documents"] == health["chunks"] == 1
+    assert health["embedded_chunks"] == health["pending_sources"] == health["failed_sources"] == 0
+
+
+async def test_health_detects_migration_mismatch(client: httpx.AsyncClient) -> None:
+    async with get_session_factory()() as db:
+        await db.execute(text("UPDATE alembic_version SET version_num='old'"))
+        await db.commit()
+    try:
+        response = await client.get("/health")
+        assert response.status_code == 503
+        assert response.json()["database"] == "connected"
+        assert response.json()["schema"] == "migration_required"
+    finally:
+        async with get_session_factory()() as db:
+            await db.execute(text("UPDATE alembic_version SET version_num='0001'"))
+            await db.commit()
+
+
+async def test_provider_receives_evidence_input_and_conversation(client: httpx.AsyncClient) -> None:
+    class TestProvider(DocumentationProvider):
+        generation = "model"
+
+        async def diagnose(self, payload: DebugRequest, evidence: list[SourceDoc]) -> DiagnosisDraft:
+            assert payload.context == "timeout recovery"
+            assert evidence and "Retry the timeout" in evidence[0].excerpt
+            draft = await super().diagnose(payload, evidence)
+            draft.rootCause = "Test provider response"
+            return draft
+
+        async def reply(
+            self, question: str, diagnosis: Diagnosis, history: list[ChatMessage], evidence: list[SourceDoc]
+        ) -> str:
+            assert diagnosis.rootCause == "Test provider response"
+            assert diagnosis.request and diagnosis.request.context == "timeout recovery"
+            assert evidence
+            return f"History messages: {len(history)}"
+
+    upload = await client.post("/api/documents", data={"content": "Retry the timeout after checking network recovery."})
+    await ingest_source(UUID(upload.json()["source_id"]))
+    app.dependency_overrides[get_diagnosis_provider] = TestProvider
+    try:
+        result = (await client.post("/api/debug", json={"context": "timeout recovery"})).json()
+        assert result["generation"] == "model"
+        for count in (0, 2):
+            response = await client.post("/api/chat", json={"session_id": result["sessionId"], "question": "timeout?"})
+            assert response.json()["text"] == f"History messages: {count}"
+    finally:
+        app.dependency_overrides.pop(get_diagnosis_provider)
+
+
+async def test_short_query_and_no_evidence_reply(client: httpx.AsyncClient) -> None:
+    response = await client.post("/api/debug", json={"error": "?!"})
+    assert response.status_code == 200
+    diagnosis = response.json()
+    assert diagnosis["sources"] == []
+    assert diagnosis["status"] == "no-cause"
+    response = await client.post("/api/chat", json={"session_id": diagnosis["sessionId"], "question": "Why?"})
+    assert response.status_code == 200
+    assert response.json()["text"].startswith("No matching documentation found.")
+    assert response.json()["sources"] == []

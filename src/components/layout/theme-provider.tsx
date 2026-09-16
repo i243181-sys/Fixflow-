@@ -13,7 +13,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [dark, setDark] = useState(true);
 
   useEffect(() => {
-    const stored = localStorage.getItem("ff-theme");
+    let stored: string | null = null;
+    try { stored = localStorage.getItem("ff-theme"); } catch { /* Storage may be disabled. */ }
     const applyStoredTheme = window.requestAnimationFrame(() => {
       setDark(stored !== "light");
     });
@@ -23,10 +24,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    localStorage.setItem("ff-theme", dark ? "dark" : "light");
   }, [dark]);
 
-  const toggle = () => setDark((d) => !d);
+  const toggle = () => {
+    setDark(!dark);
+    try { localStorage.setItem("ff-theme", dark ? "light" : "dark"); } catch { /* Theme still works in memory. */ }
+  };
 
   return <ThemeCtx.Provider value={{ dark, toggle }}>{children}</ThemeCtx.Provider>;
 }

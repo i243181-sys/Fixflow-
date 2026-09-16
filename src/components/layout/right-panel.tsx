@@ -43,8 +43,8 @@ function SourceRow({
           {TYPE_ICON[source.type]}
         </span>
         {SOURCE_TYPE_LABEL[source.type]}
-        <span className="ml-auto font-mono text-muted/80">{source.relevance}%</span>
-        <ExternalLink size={11} className="opacity-0 transition-opacity group-hover:opacity-100" />
+        {source.relevance > 0 && <span className="ml-auto font-mono text-muted/80">{source.relevance}%</span>}
+        {sourceUrl && <ExternalLink size={11} className="opacity-0 transition-opacity group-hover:opacity-100" />}
       </div>
       <p className="mt-0.5 truncate text-[13px] text-foreground/90">{source.title}</p>
       {!compact && (
@@ -115,7 +115,7 @@ export function RightPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {tab === "sources" &&
-          (!diagnosis ? (
+          (!diagnosis || !diagnosis.sources.length ? (
             <EmptyHint text="Run a diagnosis to see retrieved sources here." />
           ) : (
             <div className="space-y-1">
@@ -136,7 +136,7 @@ export function RightPanel({
             <MetaBlock label="Session" value="Current workspace session" />
             {diagnosis && (
               <>
-                <MetaBlock label="Confidence" value={`${diagnosis.confidence}%`} />
+                <MetaBlock label="Confidence" value={diagnosis.confidence === null ? "Not assessed" : `${diagnosis.confidence}%`} />
                 <MetaBlock label="Chunks retrieved" value={String(diagnosis.rag.retrieved)} />
                 <MetaBlock label="Chunks reranked" value={String(diagnosis.rag.reranked)} />
               </>
@@ -155,9 +155,9 @@ export function RightPanel({
                 <EmptyHint text="No files attached to this session yet." />
               ) : (
                 <ul className="space-y-1">
-                  {files.map((f) => (
+                  {files.map((f, index) => (
                     <li
-                      key={f}
+                      key={`${f}-${index}`}
                       className="flex items-center gap-2 rounded-md bg-panel px-2.5 py-1.5 text-[13px] text-foreground/85"
                     >
                       <FileCode2 size={13} className="shrink-0 text-muted" />

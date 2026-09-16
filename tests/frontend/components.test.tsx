@@ -13,10 +13,12 @@ import { ToastProvider, useToast } from "@/components/ui/toast";
 import { ASYNCIO_DIAGNOSIS } from "./fixtures/diagnosis";
 
 const sendFollowUp = vi.hoisted(() => vi.fn());
+const listMessages = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   sendFollowUp,
+  listMessages,
 }));
 
 function withToasts(component: React.ReactNode) {
@@ -59,14 +61,14 @@ describe("shared UI", () => {
   it("shows pipeline and expandable RAG details", () => {
     render(
       <>
-        <PipelineProgress currentStep={2} />
+        <PipelineProgress />
         <RagTransparency rag={ASYNCIO_DIAGNOSIS.rag} />
       </>
     );
 
-    expect(screen.getByText("3/7")).toBeDefined();
+    expect(screen.getByRole("status")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: /How FixFlow found/ }));
-    expect(screen.getByText("Hybrid Retrieval")).toBeDefined();
+    expect(screen.getByText("Keyword retrieval")).toBeDefined();
     expect(screen.getByText("24", { selector: "p" })).toBeDefined();
   });
 
@@ -144,7 +146,7 @@ describe("debug interactions", () => {
     expect(screen.queryByText("Likely Cause Found")).toBeNull();
   });
 
-  it("captures code, context, files, and selected technologies", () => {
+  it("captures code, context, files, and selected technologies", async () => {
     const onDiagnose = vi.fn();
     const onFilesChange = vi.fn();
     const onTechsChange = vi.fn();
@@ -161,7 +163,7 @@ describe("debug interactions", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Code" }));
     fireEvent.change(screen.getByLabelText("Code"), { target: { value: "print('ready')" } });
-    expect(screen.getByText("preview.py")).toBeDefined();
+    expect(screen.getByText("Code preview (first 8,000 characters)")).toBeDefined();
     fireEvent.click(screen.getByRole("tab", { name: "Context" }));
     fireEvent.change(screen.getByLabelText("Problem context"), { target: { value: "Worker failed" } });
     fireEvent.change(screen.getByLabelText("GitHub repository URL"), {
@@ -169,14 +171,17 @@ describe("debug interactions", () => {
     });
     const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
     fireEvent.change(fileInput!, { target: { files: [new File(["code"], "worker.py")] } });
+    await waitFor(() => expect(onFilesChange).toHaveBeenCalledWith(["worker.py"]));
     fireEvent.click(screen.getByRole("button", { name: /Select technology/ }));
     fireEvent.click(screen.getByRole("button", { name: "Python" }));
-    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+    fireEvent.keyDown(screen.getByLabelText("Problem context"), { key: "Enter", ctrlKey: true });
 
     expect(onRepoChange).toHaveBeenCalledWith("https://github.com/example/project");
     expect(onFilesChange).toHaveBeenCalledWith(["worker.py"]);
     expect(onTechsChange).toHaveBeenCalledWith(["Python"]);
-    expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ context: "Worker failed" }));
+    expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({
+      context: "Worker failed", files: [{ name: "worker.py", content: "code" }],
+    }));
   });
 
   it("sends a follow-up and renders its grounded source", async () => {
@@ -187,6 +192,8 @@ describe("debug interactions", () => {
       sources: [{ title: "Async docs", type: "docs" }],
     });
     withToasts(<FollowUpChat sessionId="session-1" confidence={88} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Follow-up question")).toHaveProperty("disabled", false));
 
     fireEvent.change(screen.getByLabelText("Follow-up question"), {
       target: { value: "How should I call it?" },
@@ -200,5 +207,35 @@ describe("debug interactions", () => {
       "session-1",
       expect.any(AbortSignal)
     );
+  });
+
+  it("restores persisted conversation and resets it when switching sessions", async () => {
+    listMessages.mockResolvedValueOnce([{ id: "old", role: "user", text: "Earlier question" }]);
+    const view = withToasts(<FollowUpChat sessionId="first" confidence={null} />);
+    expect(await screen.findByText("Earlier question")).toBeDefined();
+    view.rerender(<ToastProvider><FollowUpChat sessionId="second" confidence={null} /></ToastProvider>);
+    await waitFor(() => expect(screen.getByLabelText("Follow-up question")).toHaveProperty("disabled", false));
+    expect(screen.queryByText("Earlier question")).toBeNull();
+  });
+
+  it("restores an unsent question after a chat failure", async () => {
+    sendFollowUp.mockRejectedValueOnce(new Error("offline"));
+    withToasts(<FollowUpChat sessionId="failed" confidence={null} />);
+    const input = screen.getByLabelText("Follow-up question");
+    await waitFor(() => expect(input).toHaveProperty("disabled", false));
+    fireEvent.change(input, { target: { value: "Retry this question" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send follow-up" }));
+    await waitFor(() => expect(input).toHaveProperty("value", "Retry this question"));
+    expect(screen.queryByText("Retry this question")).toBeNull();
+  });
+
+  it("renders an honest retrieval-only result without confidence or fabricated code", async () => {
+    withToasts(<DiagnosisResult diagnosis={{
+      ...ASYNCIO_DIAGNOSIS, generation: "disabled", confidence: null, codeFix: null, alternatives: [],
+    }} onSaved={vi.fn()} />);
+    expect(screen.getByText(/AI diagnosis and suggested code changes are not connected/)).toBeDefined();
+    expect(screen.queryByText("92%")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+    await waitFor(() => expect(screen.getByLabelText("Follow-up question")).toHaveProperty("disabled", false));
   });
 });

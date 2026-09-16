@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/layout/app-shell";
 import { RightPanel } from "@/components/layout/right-panel";
 import { DebugInput } from "@/components/debug/debug-input";
@@ -11,10 +11,12 @@ import { useToast } from "@/components/ui/toast";
 import { diagnose, getSession, saveSolution as saveSolutionApi, type DebugRequest } from "@/lib/api";
 import type { Diagnosis } from "@/lib/types";
 
-function DebugSessionContent() {
+function DebugSessionContent({ sessionId }: { sessionId: string | null }) {
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
   const [busy, setBusy] = useState(false);
-  const [step, setStep] = useState(0);
+  const [loadingSession, setLoadingSession] = useState(Boolean(sessionId));
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<string[]>([]);
   const [techs, setTechs] = useState<string[]>([]);
@@ -24,26 +26,31 @@ function DebugSessionContent() {
   const diagnosisRequest = useRef<AbortController | null>(null);
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { toast } = useToast();
-  const params = useSearchParams();
+  const router = useRouter();
 
   useEffect(() => {
-    const sid = params.get("session");
+    const sid = sessionId;
     if (sid) {
       const controller = new AbortController();
       void getSession(sid, controller.signal)
         .then((session) => {
+          if (controller.signal.aborted) return;
           setDiagnosis(session);
           setTechs(session.detected);
-          toast(`Reopened session "${sid}"`, "info");
+          setFiles(session.request?.files?.map((file) => file.name) ?? []);
+          setRepoUrl(session.request?.repo_url ?? "");
         })
         .catch(() => {
           if (!controller.signal.aborted) {
             setError("Could not reopen that debug session.");
           }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setLoadingSession(false);
         });
       return () => controller.abort();
     }
-  }, [params, toast]);
+  }, [sessionId]);
 
   useEffect(
     () => () => {
@@ -61,43 +68,47 @@ function DebugSessionContent() {
     setBusy(true);
     setError(null);
     setDiagnosis(null);
-    setStep(0);
-    const timer = setInterval(() => setStep((s) => Math.min(s + 1, 6)), 380);
+    setSaved(false);
     try {
       const result = await diagnose(req, controller.signal);
       if (controller.signal.aborted) return;
       setDiagnosis(result);
       setRightOpen(true);
+      window.dispatchEvent(new Event("fixflow:sessions-changed"));
+      router.replace(`/?session=${encodeURIComponent(result.sessionId)}`);
       scrollTimer.current = setTimeout(
         () => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
         100
       );
-    } catch {
+    } catch (failure) {
       if (!controller.signal.aborted) {
-        setError("Diagnosis failed. Check your inputs and try again.");
+        setError(failure instanceof Error ? failure.message : "Diagnosis failed. Please try again.");
       }
     } finally {
-      clearInterval(timer);
       if (diagnosisRequest.current === controller) {
         diagnosisRequest.current = null;
         setBusy(false);
       }
     }
-  }, []);
+  }, [router]);
 
   const saveSolution = async () => {
-    if (!diagnosis) return;
+    if (!diagnosis || saving || saved) return;
+    setSaving(true);
     try {
       await saveSolutionApi({
-        problem: diagnosis.rootCause,
+        problem: (diagnosis.request?.error || diagnosis.request?.context || diagnosis.rootCause).slice(0, 20_000),
         rootCause: diagnosis.rootCause,
         technology: diagnosis.detected,
         fixSummary: diagnosis.recommendedFix[0]?.detail ?? "Review the recommended fix.",
         sources: diagnosis.sources.map((source) => ({ title: source.title, type: source.type })),
       });
       toast("Solution saved to Saved Solutions", "success");
+      setSaved(true);
     } catch {
       toast("Could not save this solution.", "error");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -124,21 +135,29 @@ function DebugSessionContent() {
             Debug smarter. <span className="text-accent">Fix faster.</span>
           </h1>
           <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-muted">
-            Grounded debugging using documentation, GitHub issues, community
-            solutions and code examples.
+            Search your documentation, keep debugging context together, and review relevant evidence.
           </p>
         </div>
 
-        <DebugInput
+        {loadingSession && <p role="status" className="text-sm text-muted">Loading session…</p>}
+        {!loadingSession && <DebugInput
           onDiagnose={runPipeline}
           busy={busy}
           onFilesChange={setFiles}
           onTechsChange={setTechs}
           onRepoChange={setRepoUrl}
-        />
+          initialValues={diagnosis?.request ? {
+            ...diagnosis.request,
+            error: diagnosis.request.error ?? undefined,
+            code: diagnosis.request.code ?? undefined,
+            context: diagnosis.request.context ?? undefined,
+            repoUrl: diagnosis.request.repo_url ?? undefined,
+          } : undefined}
+          onClear={() => { setDiagnosis(null); setError(null); setSaved(false); router.replace("/"); }}
+        />}
 
         <div ref={resultRef}>
-          {busy && <PipelineProgress currentStep={step} />}
+          {busy && <PipelineProgress />}
           {error && !busy && (
             <div
               className="ff-fade-up rounded-xl border border-danger/40 bg-danger/10 px-4 py-3.5 text-sm text-danger"
@@ -153,21 +172,24 @@ function DebugSessionContent() {
               </button>
             </div>
           )}
-          {!busy && !error && !diagnosis && (
+          {!busy && !loadingSession && !error && !diagnosis && (
             <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center">
               <p className="text-sm text-muted">
                 Paste an error, code, or context above — then run{" "}
                 <span className="text-foreground">Diagnose Error</span>.
               </p>
               <p className="mt-1 font-mono text-[11px] text-muted/60">
-                searches docs · github · community · code examples
+                searches your uploaded knowledge base
               </p>
             </div>
           )}
           {diagnosis && !busy && (
             <DiagnosisResult
+              key={diagnosis.sessionId}
               diagnosis={diagnosis}
               onSaved={saveSolution}
+              saving={saving}
+              saved={saved}
             />
           )}
         </div>
@@ -176,10 +198,15 @@ function DebugSessionContent() {
   );
 }
 
+function SessionRoute() {
+  const sessionId = useSearchParams().get("session");
+  return <DebugSessionContent key={sessionId ?? "new"} sessionId={sessionId} />;
+}
+
 export default function DebugSessionPage() {
   return (
     <Suspense fallback={null}>
-      <DebugSessionContent />
+      <SessionRoute />
     </Suspense>
   );
 }

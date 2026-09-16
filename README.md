@@ -56,7 +56,7 @@ myenev/bin/python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8
 npm run dev
 ```
 
-Frontend: http://localhost:3000. Health: http://localhost:8000/health. API documentation: http://localhost:8000/docs. Health reports API, database, and pgvector readiness; unavailable dependencies return HTTP 503 without credentials or internal errors.
+Frontend: http://localhost:3000. Health: http://localhost:8000/health. API documentation: http://localhost:8000/docs. Health checks database connectivity, pgvector, required tables, and the Alembic revision. It reports source/document/chunk/embedding counts and AI configuration separately. Missing migrations or unavailable dependencies return HTTP 503 without exposing credentials or internal errors. Settings displays this readiness information.
 
 ## Ingestion and persistence
 
@@ -68,7 +68,26 @@ A database-backed worker loads only the new file, batches document/chunk inserts
 
 Remote URL registration remains available but reports a clear failed/not-configured state: there is no remote fetcher. Scanned PDFs require OCR before upload. Local single-user access remains the deployment model; the backend is not a multi-tenant authorization service.
 
-The Knowledge Sources page polls pending jobs and shows “Ready for embedding,” never “Indexed” before vectors exist. The original UI layout is unchanged.
+The Knowledge Sources page polls pending jobs, retries transient polling failures, and shows “Ready for embedding,” never “Indexed” before vectors exist. File uploads preserve the original file; pasted text is submitted as a separate input mode. Remote URL controls are disabled until a fetcher is implemented.
+
+## Debugging and AI integration
+
+The current implementation is **documentation retrieval, not AI diagnosis**. Both diagnosis and follow-up questions search real PostgreSQL document chunks using keyword retrieval. With no model connected, the UI reports no assessed confidence, does not invent code fixes, and labels retrieved evidence honestly. Upload documentation first: an empty database is structurally ready but cannot provide retrieval evidence.
+
+Debug inputs (error, code, context, repository reference, technologies, and text attachments) are persisted with each session. Attachments are limited to five UTF-8 text/source files, 50 KB each. Repository references are saved, not fetched. Reopening a session restores its inputs and conversation via `GET /api/sessions/{id}` and `GET /api/sessions/{id}/messages`. History, saved details, Markdown export, theme selection, and request error/retry states are supported.
+
+To integrate an AI provider:
+
+1. Implement `DiagnosisProvider` in `backend/services/diagnosis.py` and return it from `get_diagnosis_provider()`. The adapter receives validated inputs and retrieved evidence; follow-up calls also receive the saved diagnosis and conversation. Keep API keys server-side.
+2. Return a validated `DiagnosisDraft` and set the adapter's `generation` to `model`. Add provider timeouts, safe errors, and adapter tests. Update the health configuration indicator when enabling the provider; it currently reports `not_configured`.
+3. Select an embedding model, configure its model/dimension, and implement embedding generation using the vector repository below. The current keyword search can then be replaced or combined with vector retrieval; hybrid search and reranking are not implemented yet.
+4. Before public deployment, implement backend token verification and per-user data isolation, plus upload/API quotas. Clerk sign-in alone does not protect the shared backend. Treat document and attachment text as untrusted model input and avoid sending secrets to a provider.
+
+The provider dependency is tested independently from retrieval and persistence; no paid API calls are made by the test suite.
+
+### Authentication troubleshooting
+
+If the browser loops before the workspace renders and the server logs a Clerk handshake/session redirect warning, check connectivity to your Clerk instance and verify that the publishable and secret keys belong to the same instance. Do not disable authentication or paste secret keys into logs to investigate. A frontend build or mocked component test does not validate live Clerk sign-in. Backend authorization remains a separate production requirement, as noted above.
 
 ### Optional legacy import
 

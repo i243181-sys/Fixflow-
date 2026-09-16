@@ -26,7 +26,7 @@ export function Tooltip({
         role="tooltip"
         className={cn(
           "pointer-events-none absolute z-50 hidden group-hover/tt:block group-focus-within/tt:block",
-          "whitespace-nowrap rounded bg-[#262b33] px-2 py-1 text-[11px] text-foreground",
+          "whitespace-nowrap rounded bg-panel-2 px-2 py-1 text-[11px] text-foreground",
           "border border-border-strong shadow-md shadow-black/50",
           positions[side]
         )}

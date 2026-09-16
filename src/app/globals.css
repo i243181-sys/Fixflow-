@@ -11,6 +11,7 @@
   --muted: #9aa1ac;
   --accent: #ff6b35;
   --accent-strong: #ff7f4f;
+  --accent-foreground: #1a0e08;
   --lime: #b5e848;
   --success: #4ecf7a;
   --warning: #e8b04b;
@@ -29,6 +30,7 @@
   --color-muted: var(--muted);
   --color-accent: var(--accent);
   --color-accent-strong: var(--accent-strong);
+  --color-accent-foreground: var(--accent-foreground);
   --color-lime: var(--lime);
   --color-success: var(--success);
   --color-warning: var(--warning);
@@ -39,6 +41,25 @@
 
 html {
   color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --background: #f5f6f8;
+  --surface: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #eef0f4;
+  --border: #dce0e6;
+  --border-strong: #b9c1cc;
+  --foreground: #202630;
+  --muted: #586374;
+  --accent: #c74414;
+  --accent-strong: #db5421;
+  --accent-foreground: #ffffff;
+  --lime: #517c10;
+  --success: #237740;
+  --warning: #966310;
+  --danger: #bf342b;
 }
 
 body {
@@ -77,14 +98,13 @@ body {
 }
 
 /* Code syntax highlighting (custom tokenizer) */
-.code-token.keyword { color: #ff8a5c; }
-.code-token.string  { color: #b5e848; }
-.code-token.comment { color: #7a828e; font-style: italic; }
-.code-token.number  { color: #e8b04b; }
-.code-token.func    { color: #f0b37e; }
-.code-token.decorator { color: #e8b04b; }
-.code-token.operator { color: #c9ced6; }
-.code-token.builtin { color: #7ee0a8; }
+.code-token-keyword { color: var(--accent); }
+.code-token-string { color: var(--lime); }
+.code-token-comment { color: var(--muted); font-style: italic; }
+.code-token-number, .code-token-decorator { color: var(--warning); }
+.code-token-func { color: var(--accent); }
+.code-token-operator { color: var(--foreground); }
+.code-token-builtin { color: var(--success); }
 
 textarea, input, select {
   font-family: inherit;
@@ -119,4 +139,13 @@ textarea, input, select {
     linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
   background-size: 32px 32px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

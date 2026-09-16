@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HighlightedCode } from "./highlight";
@@ -25,6 +25,8 @@ export function CodeBlock({
   className?: string;
 }) {
   const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
   const { toast } = useToast();
 
   const copy = async () => {
@@ -32,7 +34,8 @@ export function CodeBlock({
       await navigator.clipboard.writeText(code);
       setCopied(true);
       toast(`${label ?? "Code"} copied to clipboard`, "success");
-      setTimeout(() => setCopied(false), 1600);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 1600);
     } catch {
       toast("Could not access clipboard", "error");
     }
@@ -52,7 +55,7 @@ export function CodeBlock({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-lg border bg-[#0e1013]",
+        "overflow-hidden rounded-lg border bg-background",
         tones[tone],
         className
       )}

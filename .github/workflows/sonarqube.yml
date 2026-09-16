@@ -22,8 +22,9 @@ jobs:
         image: pgvector/pgvector:pg18
         env:
           POSTGRES_USER: fixflow
-          POSTGRES_PASSWORD: fixflow
           POSTGRES_DB: fixflow_test
+          # This database is isolated to the ephemeral Actions runner.
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -62,7 +63,7 @@ jobs:
       - name: Run backend tests with coverage
         run: python -m pytest
         env:
-          TEST_DATABASE_URL: postgresql+asyncpg://fixflow:fixflow@localhost:5432/fixflow_test
+          TEST_DATABASE_URL: postgresql+asyncpg://fixflow@localhost:5432/fixflow_test
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v7

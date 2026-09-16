@@ -103,7 +103,15 @@ class VectorRepository:
         self.validate_vector(vector, dimension)
         if not 1 <= limit <= 100:
             raise ValueError("Search limit must be between 1 and 100")
-        if not await self.count_embedded_chunks():
+        if not await self.session.scalar(
+            select(
+                exists().where(
+                    DocumentChunk.embedding.is_not(None),
+                    DocumentChunk.embedding_model == model,
+                    DocumentChunk.embedding_dimension == dimension,
+                )
+            )
+        ):
             raise EmbeddingPipelineNotConfigured()
         matching = (
             select(DocumentChunk)

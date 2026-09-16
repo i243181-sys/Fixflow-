@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { startTransition, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bookmark,
   Bug,
@@ -25,7 +25,7 @@ export function MobileNavButton({ onClick }: { onClick: () => void }) {
       type="button"
       onClick={onClick}
       aria-label="Open menu"
-      className="rounded-md p-1.5 text-muted transition-colors hover:bg-white/5 hover:text-foreground lg:hidden"
+      className="rounded-md p-1.5 text-muted transition-colors hover:bg-foreground/5 hover:text-foreground lg:hidden"
     >
       <Menu size={18} />
     </button>
@@ -64,17 +64,26 @@ export function Sidebar({
 
   useEffect(() => {
     const controller = new AbortController();
-    void listSessions(controller.signal)
+    const refresh = () => { void listSessions(controller.signal)
       .then((items) => {
-        startTransition(() => setSessions(items.slice(0, 4)));
+        if (!controller.signal.aborted) setSessions(items.slice(0, 4));
       })
       .catch(() => {
         if (!controller.signal.aborted) {
-          startTransition(() => setSessions([]));
+          setSessions([]);
         }
-      });
-    return () => controller.abort();
+      }); };
+    refresh();
+    window.addEventListener("fixflow:sessions-changed", refresh);
+    return () => { controller.abort(); window.removeEventListener("fixflow:sessions-changed", refresh); };
   }, []);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") onMobileClose(); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [mobileOpen, onMobileClose]);
 
   return (
     <>
@@ -91,19 +100,17 @@ export function Sidebar({
           "fixed inset-y-0 left-0 z-50 flex h-dvh w-60 flex-col border-r border-border bg-surface transition-transform duration-200",
           "lg:relative lg:h-auto lg:translate-x-0",
           collapsed ? "lg:w-14" : "lg:w-60",
-          mobileOpen ? "translate-x-0" : "-translate-x-full"
+          mobileOpen ? "translate-x-0" : "-translate-x-full max-lg:invisible"
         )}
       >
         <div className="flex h-14 items-center gap-2.5 border-b border-border px-4">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent/15 text-accent">
             <Bug size={18} strokeWidth={2.2} />
           </span>
-          {!collapsed && (
-            <span className="flex flex-col leading-tight">
+            <span className={cn("flex flex-col leading-tight", collapsed && "lg:hidden")}>
               <span className="font-semibold tracking-tight">FixFlow</span>
               <span className="text-[10px] text-muted">Debugging RAG</span>
             </span>
-          )}
           <button
             onClick={onToggle}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -129,16 +136,17 @@ export function Sidebar({
                 href={item.href}
                 onClick={onMobileClose}
                 aria-current={active ? "page" : undefined}
+                aria-label={item.label}
                 className={cn(
                   "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
                   active
                     ? "bg-accent/10 text-accent"
-                    : "text-muted hover:bg-white/5 hover:text-foreground",
+                    : "text-muted hover:bg-foreground/5 hover:text-foreground",
                   collapsed && "lg:justify-center lg:px-0"
                 )}
               >
                 <item.icon size={16} className="shrink-0" />
-                {!collapsed && item.label}
+                <span className={collapsed ? "lg:hidden" : undefined}>{item.label}</span>
               </Link>
             );
             return collapsed ? (
@@ -160,9 +168,9 @@ export function Sidebar({
               {sessions.map((s) => (
                 <Link
                   key={s.id}
-                  href={`/?session=${s.id}`}
+                  href={`/?session=${encodeURIComponent(s.id)}`}
                   onClick={onMobileClose}
-                  className="group flex items-center gap-2 rounded-md px-2.5 py-2 transition-colors hover:bg-white/5"
+                  className="group flex items-center gap-2 rounded-md px-2.5 py-2 transition-colors hover:bg-foreground/5"
                 >
                   <span
                     aria-hidden

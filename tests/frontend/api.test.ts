@@ -61,7 +61,7 @@ describe("backend API client", () => {
   });
 
   it("serializes diagnosis, chat, and saved-solution requests", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: "response" }));
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse({ id: "response" })));
     vi.stubGlobal("fetch", fetchMock);
     const { diagnose, saveSolution, sendFollowUp } = await loadApi();
 
@@ -89,7 +89,7 @@ describe("backend API client", () => {
   });
 
   it("loads collection endpoints", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]));
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse([])));
     vi.stubGlobal("fetch", fetchMock);
     const { listKnowledgeSources, listSaved, listSessions } = await loadApi();
 
@@ -154,5 +154,25 @@ describe("backend API client", () => {
     controller.abort();
 
     await expect(listSessions(controller.signal)).rejects.toThrow("NEXT_PUBLIC_API_URL is not configured");
+  });
+
+  it("reports degraded readiness without hiding database details", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ status: "degraded", schema: "migration_required" }, 503)));
+    const { checkBackendHealth } = await loadApi();
+    await expect(checkBackendHealth()).resolves.toMatchObject({ status: "degraded", schema: "migration_required" });
+  });
+
+  it("rejects malformed successful responses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not-json")));
+    const { listSaved } = await loadApi();
+    await expect(listSaved()).rejects.toThrow("invalid response");
+  });
+
+  it("loads persisted messages with an encoded session ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+    const { listMessages } = await loadApi();
+    await listMessages("folder/name");
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/sessions/folder%2Fname/messages", expect.any(Object));
   });
 });

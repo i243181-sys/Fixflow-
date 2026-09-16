@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import HistoryPage from "@/app/history/page";
@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
   saveSolution: vi.fn(),
 }));
 const toast = vi.hoisted(() => vi.fn());
+const navigation = vi.hoisted(() => ({ session: null as string | null, router: { replace: vi.fn() } }));
 
 vi.mock("@/lib/api", () => api);
 vi.mock("@/components/ui/toast", () => ({ useToast: () => ({ toast }) }));
@@ -30,7 +31,8 @@ vi.mock("@/components/layout/app-shell", () => ({
 }));
 vi.mock("@/components/layout/right-panel", () => ({ RightPanel: () => null }));
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => ({ get: () => null }),
+  useSearchParams: () => ({ get: () => navigation.session }),
+  useRouter: () => navigation.router,
 }));
 vi.mock("next/link", () => ({
   default: ({ children, href }: { children: ReactNode; href: string }) => (
@@ -67,6 +69,8 @@ vi.mock("@/components/debug/diagnosis-result", () => ({
 }));
 
 beforeEach(() => {
+  navigation.session = null;
+  navigation.router.replace.mockReset();
   api.addKnowledgeSource.mockReset();
   api.checkBackendHealth.mockReset();
   api.diagnose.mockReset();
@@ -97,7 +101,7 @@ describe("application pages", () => {
     render(<HistoryPage />);
 
     const link = await screen.findByRole("link", { name: /Async failure/ });
-    expect(link.getAttribute("href")).toBe("/?session=session/1");
+    expect(link.getAttribute("href")).toBe("/?session=session%2F1");
   });
 
   it("shows saved solutions returned by the service", async () => {
@@ -144,7 +148,8 @@ describe("application pages", () => {
           kind: "docs",
           value: "Runbook",
           content: "# Recovery\nRestart the worker.",
-        })
+        }),
+        expect.any(AbortSignal)
       )
     );
     expect(await screen.findByText("Runbook")).toBeDefined();
@@ -208,5 +213,65 @@ describe("application pages", () => {
     expect(await screen.findByText(ASYNCIO_DIAGNOSIS.rootCause)).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Save diagnosis" }));
     await waitFor(() => expect(api.saveSolution).toHaveBeenCalledOnce());
+    expect(navigation.router.replace).toHaveBeenCalledWith(`/?session=${ASYNCIO_DIAGNOSIS.sessionId}`);
+  });
+
+  it("clears the previous result when navigating to a new session", async () => {
+    navigation.session = "existing";
+    api.getSession.mockResolvedValue(ASYNCIO_DIAGNOSIS);
+    const view = render(<DebugSessionPage />);
+    expect(await screen.findByText(ASYNCIO_DIAGNOSIS.rootCause)).toBeDefined();
+    navigation.session = null;
+    view.rerender(<DebugSessionPage />);
+    expect(screen.queryByText(ASYNCIO_DIAGNOSIS.rootCause)).toBeNull();
+    expect(screen.getByRole("button", { name: "Run diagnosis" })).toBeDefined();
+  });
+
+  it("lets users retry a failed history load", async () => {
+    api.listSessions.mockRejectedValueOnce(new Error("Backend unavailable")).mockResolvedValue([]);
+    render(<HistoryPage />);
+    expect(await screen.findByText("Backend unavailable")).toBeDefined();
+    expect(screen.queryByText("No debug sessions yet.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh history" }));
+    expect(await screen.findByText("No debug sessions yet.")).toBeDefined();
+  });
+
+  it("reports degraded database readiness in settings", async () => {
+    api.checkBackendHealth.mockResolvedValue({ status: "degraded", database: "connected", schema: "migration_required" });
+    api.listKnowledgeSources.mockResolvedValue([]);
+    render(<SettingsPage />);
+    expect(await screen.findByText("degraded")).toBeDefined();
+    expect(screen.getByText(/migration_required/)).toBeDefined();
+    expect(screen.getByText("Not connected")).toBeDefined();
+  });
+
+  it("uploads the selected binary document without an editable text preview", async () => {
+    api.listKnowledgeSources.mockResolvedValue([]);
+    api.addKnowledgeSource.mockResolvedValue({
+      id: "pdf", name: "Guide.pdf", kind: "upload", status: "ready_for_embedding", chunks: 1,
+    });
+    render(<SourcesPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /^Upload a file/i }));
+    const file = new File(["%PDF-1.7"], "Guide.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText("Upload document"), { target: { files: [file] } });
+    expect(screen.queryByRole("textbox", { name: "Paste document text" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Add to knowledge base/ }));
+    await waitFor(() => expect(api.addKnowledgeSource).toHaveBeenCalledWith(
+      expect.objectContaining({ file }), expect.any(AbortSignal),
+    ));
+  });
+
+  it("keeps both uploaded and existing sources when the initial list arrives late", async () => {
+    const existing = { id: "old", name: "Existing guide", status: "ready_for_embedding", kind: "docs", chunks: 1 };
+    let finishList: (items: typeof existing[]) => void = () => {};
+    api.listKnowledgeSources.mockImplementationOnce(() => new Promise((resolve) => { finishList = resolve; }));
+    api.addKnowledgeSource.mockResolvedValue({ ...existing, id: "new", name: "New guide" });
+    render(<SourcesPage />);
+    fireEvent.change(screen.getByLabelText("Documentation content"), { target: { value: "New guide content" } });
+    fireEvent.click(screen.getByRole("button", { name: /Add to knowledge base/ }));
+    expect(await screen.findByText("New guide")).toBeDefined();
+    await act(async () => finishList([existing]));
+    expect(screen.getByText("Existing guide")).toBeDefined();
+    expect(screen.getByText("New guide")).toBeDefined();
   });
 });
